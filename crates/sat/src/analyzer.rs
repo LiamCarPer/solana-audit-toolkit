@@ -9,6 +9,7 @@ use walkdir::WalkDir;
 use crate::cpi::{self, expr_to_string_expr};
 use crate::idl::{self, IdlJson};
 use crate::sarif;
+use crate::token2022;
 use crate::types::{Finding, Severity};
 use crate::ui;
 
@@ -1257,6 +1258,7 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
     all_findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_name_strings));
     all_findings.extend(check_sysvar_misuse(&parsed_files, &all_accounts));
     all_findings.extend(check_serialization_mismatch(&parsed_files));
+    all_findings.extend(token2022::analyze(&src_path, &parsed_files, &all_accounts));
 
     if let Some(report_path) = tx_report {
         all_findings.extend(check_tx_report_correlation(&all_accounts, report_path));

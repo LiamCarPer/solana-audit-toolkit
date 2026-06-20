@@ -7,6 +7,7 @@ mod fuzzer;
 mod idl;
 mod reporter;
 mod sarif;
+mod token2022;
 mod types;
 mod ui;
 

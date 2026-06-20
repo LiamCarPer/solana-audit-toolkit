@@ -4,5 +4,6 @@ pub mod fuzzer;
 pub mod idl;
 pub mod reporter;
 pub mod sarif;
+pub mod token2022;
 pub mod types;
 pub mod ui;
