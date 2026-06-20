@@ -1,0 +1,88 @@
+{
+  "version": "0.1.0",
+  "name": "governance",
+  "instructions": [
+    {
+      "name": "createProposal",
+      "accounts": [
+        {"name": "governance", "isMut": true, "isSigner": false},
+        {"name": "proposalState", "isMut": true, "isSigner": false, "pda": {"seeds": [{"kind": "const", "value": [112, 114, 111, 112, 111, 115, 97, 108]}, {"kind": "arg", "path": "id"}]}},
+        {"name": "proposer", "isMut": false, "isSigner": true}
+      ],
+      "args": [{"name": "id", "type": "u64"}, {"name": "description", "type": "string"}]
+    },
+    {
+      "name": "vote",
+      "accounts": [
+        {"name": "proposalState", "isMut": true, "isSigner": false},
+        {"name": "voterBallot", "isMut": true, "isSigner": false, "pda": {"seeds": [{"kind": "const", "value": [118, 111, 116, 101]}, {"kind": "account", "path": "voter"}]}},
+        {"name": "voter", "isMut": false, "isSigner": true}
+      ],
+      "args": [{"name": "inFavor", "type": "bool"}]
+    },
+    {
+      "name": "executeProposal",
+      "accounts": [
+        {"name": "proposalState", "isMut": true, "isSigner": false},
+        {"name": "executor", "isMut": false, "isSigner": true}
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Governance",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name": "bump", "type": "u8"},
+          {"name": "admin", "type": "publicKey"},
+          {"name": "proposalCount", "type": "u64"},
+          {"name": "votingPeriod", "type": "i64"}
+        ]
+      }
+    },
+    {
+      "name": "ProposalState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name": "bump", "type": "u8"},
+          {"name": "proposer", "type": "publicKey"},
+          {"name": "status", "type": {"defined": "ProposalStatus"}},
+          {"name": "votesFor", "type": "u64"},
+          {"name": "votesAgainst", "type": "u64"},
+          {"name": "description", "type": "string"}
+        ]
+      }
+    },
+    {
+      "name": "VoterBallot",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name": "bump", "type": "u8"},
+          {"name": "voter", "type": "publicKey"},
+          {"name": "hasVoted", "type": "bool"}
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "ProposalStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {"name": "Active"},
+          {"name": "Passed"},
+          {"name": "Rejected"},
+          {"name": "Executed"}
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "address": "Gov11111111111111111111111111111111111111111"
+  }
+}

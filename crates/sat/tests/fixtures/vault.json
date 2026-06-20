@@ -1,0 +1,74 @@
+{
+  "version": "0.1.0",
+  "name": "vault",
+  "instructions": [
+    {
+      "name": "initializeVault",
+      "accounts": [
+        {"name": "vaultState", "isMut": true, "isSigner": false, "pda": {"seeds": [{"kind": "const", "value": [118, 97, 117, 108, 116]}]}},
+        {"name": "authority", "isMut": false, "isSigner": true},
+        {"name": "systemProgram", "isMut": false, "isSigner": false}
+      ],
+      "args": []
+    },
+    {
+      "name": "deposit",
+      "accounts": [
+        {"name": "vaultState", "isMut": true, "isSigner": false},
+        {"name": "userDeposit", "isMut": true, "isSigner": false, "pda": {"seeds": [{"kind": "const", "value": [100, 101, 112, 111, 115, 105, 116]}, {"kind": "account", "path": "user"}]}},
+        {"name": "user", "isMut": false, "isSigner": true},
+        {"name": "tokenProgram", "isMut": false, "isSigner": false}
+      ],
+      "args": [{"name": "amount", "type": "u64"}]
+    },
+    {
+      "name": "withdraw",
+      "accounts": [
+        {"name": "vaultState", "isMut": true, "isSigner": false},
+        {"name": "userDeposit", "isMut": true, "isSigner": false, "pda": {"seeds": [{"kind": "const", "value": [100, 101, 112, 111, 115, 105, 116]}, {"kind": "account", "path": "user"}]}},
+        {"name": "user", "isMut": false, "isSigner": true},
+        {"name": "tokenProgram", "isMut": false, "isSigner": false}
+      ],
+      "args": [{"name": "amount", "type": "u64"}]
+    },
+    {
+      "name": "closeVault",
+      "accounts": [
+        {"name": "vaultState", "isMut": true, "isSigner": false},
+        {"name": "authority", "isMut": false, "isSigner": true}
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "VaultState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name": "bump", "type": "u8"},
+          {"name": "authority", "type": "publicKey"},
+          {"name": "totalDeposits", "type": "u64"},
+          {"name": "isInitialized", "type": "bool"},
+          {"name": "isPaused", "type": "bool"}
+        ]
+      }
+    },
+    {
+      "name": "UserDeposit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name": "bump", "type": "u8"},
+          {"name": "owner", "type": "publicKey"},
+          {"name": "amount", "type": "u64"},
+          {"name": "depositedAt", "type": "i64"}
+        ]
+      }
+    }
+  ],
+  "types": [],
+  "metadata": {
+    "address": "Vau1t11111111111111111111111111111111111111"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "version": "0.1.0",
+  "name": "reinit_vuln",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        {"name": "state", "isMut": true, "isSigner": false},
+        {"name": "payer", "isMut": true, "isSigner": true},
+        {"name": "systemProgram", "isMut": false, "isSigner": false}
+      ],
+      "args": []
+    },
+    {
+      "name": "updateAdmin",
+      "accounts": [
+        {"name": "state", "isMut": true, "isSigner": false},
+        {"name": "newAdmin", "isMut": false, "isSigner": false}
+      ],
+      "args": [{"name": "newAdmin", "type": "publicKey"}]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "State",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name": "admin", "type": "publicKey"},
+          {"name": "value", "type": "u64"}
+        ]
+      }
+    }
+  ],
+  "types": []
+}

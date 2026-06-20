@@ -1,0 +1,24 @@
+{
+  "version": "0.1.0",
+  "name": "discriminator_collision",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        {"name": "state", "isMut": true, "isSigner": false},
+        {"name": "authority", "isMut": false, "isSigner": true}
+      ],
+      "args": []
+    },
+    {
+      "name": "withdrawFunds",
+      "accounts": [
+        {"name": "state", "isMut": true, "isSigner": false},
+        {"name": "authority", "isMut": false, "isSigner": true}
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [],
+  "types": []
+}

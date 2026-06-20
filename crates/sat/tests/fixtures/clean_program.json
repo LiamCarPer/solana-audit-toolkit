@@ -1,0 +1,49 @@
+{
+  "version": "0.1.0",
+  "name": "clean_program",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        {"name": "state", "isMut": true, "isSigner": false, "pda": {"seeds": [{"kind": "const", "value": [115, 116, 97, 116, 101]}]}},
+        {"name": "authority", "isMut": false, "isSigner": true},
+        {"name": "systemProgram", "isMut": false, "isSigner": false}
+      ],
+      "args": []
+    },
+    {
+      "name": "updateValue",
+      "accounts": [
+        {"name": "state", "isMut": true, "isSigner": false},
+        {"name": "authority", "isMut": false, "isSigner": true}
+      ],
+      "args": [{"name": "newValue", "type": "u64"}]
+    },
+    {
+      "name": "close",
+      "accounts": [
+        {"name": "state", "isMut": true, "isSigner": false},
+        {"name": "authority", "isMut": false, "isSigner": true}
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "State",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name": "bump", "type": "u8"},
+          {"name": "authority", "type": "publicKey"},
+          {"name": "value", "type": "u64"},
+          {"name": "isInitialized", "type": "bool"}
+        ]
+      }
+    }
+  ],
+  "types": [],
+  "metadata": {
+    "address": "C1ean11111111111111111111111111111111111111"
+  }
+}
