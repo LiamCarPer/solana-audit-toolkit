@@ -28,7 +28,7 @@ pub fn print_finding(finding: &crate::types::Finding) {
     println!("{} {}", tag, finding.title.bold());
 
     if let Some(ref location) = finding.location {
-        println!("  {} {location}", "📍".dimmed());
+        println!("  at {}", location.dimmed());
     }
 
     println!();
@@ -49,17 +49,17 @@ pub fn print_section_header(title: &str) {
 }
 
 pub fn print_notice(msg: &str) {
-    println!("{} {msg}", "ℹ ".cyan());
+    println!("  {} {msg}", "---".cyan());
 }
 
 pub fn print_success(msg: &str) {
-    println!("{} {msg}", "✓ ".green());
+    println!("  {} {msg}", "OK".green());
 }
 
 pub fn print_warning(msg: &str) {
-    println!("{} {msg}", "⚠ ".yellow());
+    println!("  {} {msg}", "WARN".yellow());
 }
 
 pub fn print_error(msg: &str) {
-    println!("{} {msg}", "✗ ".red());
+    println!("  {} {msg}", "ERR".red());
 }

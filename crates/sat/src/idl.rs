@@ -778,7 +778,7 @@ fn render_state_model(states: &[StateInfo]) {
     ui::print_notice(&format!("Identified {} state type(s):", states.len()));
     println!();
     for state in states {
-        println!("  {} {}", "•".blue(), state.name.bold());
+        println!("  {} {}", "-".blue(), state.name.bold());
         let mut tags = Vec::new();
         if state.has_init_flag {
             tags.push("init-flag".dimmed());
@@ -819,8 +819,8 @@ fn render_instruction_classification(instructions: &[InstructionInfo]) {
             } else {
                 ix.writable_states.join(", ")
             };
-            let signer_mark = if ix.has_signer { " ✓signer".green() } else { " ✗no-signer".red() };
-            println!("    {} {} → {}{}", "•".blue(), ix.name.bold(), targets, signer_mark);
+            let signer_mark = if ix.has_signer { " +signer".green() } else { " -no-signer".red() };
+            println!("    {} {} → {}{}", "-".blue(), ix.name.bold(), targets, signer_mark);
         }
         println!();
     }
@@ -829,8 +829,8 @@ fn render_instruction_classification(instructions: &[InstructionInfo]) {
         println!("{}", "  Mutators:".yellow().bold());
         for ix in &mutes {
             let targets = ix.writable_states.join(", ");
-            let signer_mark = if ix.has_signer { " ✓signer".green() } else { " ✗no-signer".red() };
-            println!("    {} {} → {}{}", "•".blue(), ix.name.bold(), targets, signer_mark);
+            let signer_mark = if ix.has_signer { " +signer".green() } else { " -no-signer".red() };
+            println!("    {} {} → {}{}", "-".blue(), ix.name.bold(), targets, signer_mark);
         }
         println!();
     }
@@ -839,8 +839,8 @@ fn render_instruction_classification(instructions: &[InstructionInfo]) {
         println!("{}", "  Terminators:".red().bold());
         for ix in &terms {
             let targets = ix.writable_states.join(", ");
-            let signer_mark = if ix.has_signer { " ✓signer".green() } else { " ✗no-signer".red() };
-            println!("    {} {} → {}{}", "•".blue(), ix.name.bold(), targets, signer_mark);
+            let signer_mark = if ix.has_signer { " +signer".green() } else { " -no-signer".red() };
+            println!("    {} {} → {}{}", "-".blue(), ix.name.bold(), targets, signer_mark);
         }
         println!();
     }
@@ -853,7 +853,7 @@ fn render_instruction_classification(instructions: &[InstructionInfo]) {
             } else {
                 ix.readable_states.join(", ")
             };
-            println!("    {} {} → {}{}", "•".blue(), ix.name.bold(), targets, "".normal());
+            println!("    {} {} → {}{}", "-".blue(), ix.name.bold(), targets, "".normal());
         }
         println!();
     }
@@ -919,7 +919,7 @@ fn render_findings(findings: &[Finding]) {
                 println!("{} {} {}", format!("#{counter}").dimmed(), tag, finding.title.bold());
 
                 if let Some(ref location) = finding.location {
-                    println!("  {} {location}", "📍".dimmed());
+                    println!("  at {location}");
                 }
                 println!();
                 println!("  {}", finding.description);
@@ -964,11 +964,11 @@ fn render_summary(findings: &[Finding]) {
 
 fn severity_tag(severity: Severity) -> String {
     match severity {
-        Severity::Critical => "🔴".to_string(),
-        Severity::High => "🟠".to_string(),
-        Severity::Medium => "🟡".to_string(),
-        Severity::Low => "🔵".to_string(),
-        Severity::Informational => "⚪".to_string(),
+        Severity::Critical => "[CRIT]".red().to_string(),
+        Severity::High => "[HIGH]".red().to_string(),
+        Severity::Medium => "[MED]".yellow().to_string(),
+        Severity::Low => "[LOW]".cyan().to_string(),
+        Severity::Informational => "[INFO]".cyan().to_string(),
     }
 }
 

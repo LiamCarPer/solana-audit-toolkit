@@ -80,7 +80,7 @@ pub fn new_finding() -> Result<()> {
         .with_context(|| format!("Failed to write finding to {}", output_path.display()))?;
 
     println!();
-    println!("{} Created finding {} → {}", "✓".green(), next_id.bold(), output_path.display().to_string().dimmed());
+    println!("{} Created finding {} → {}", "OK".green(), next_id.bold(), output_path.display().to_string().dimmed());
 
     Ok(())
 }
@@ -177,7 +177,7 @@ fn prompt_required(label: &str) -> Result<String> {
         if !trimmed.is_empty() {
             return Ok(trimmed);
         }
-        println!("  {} Title is required.", "✗".red());
+        println!("  {} Title is required.", "ERR".red());
     }
 }
 
@@ -214,7 +214,7 @@ fn prompt_severity() -> Result<Severity> {
             "3" => return Ok(Severity::Medium),
             "4" => return Ok(Severity::Low),
             "5" => return Ok(Severity::Informational),
-            _ => println!("  {} Please enter a number 1-5.", "✗".red()),
+            _ => println!("  {} Please enter a number 1-5.", "ERR".red()),
         }
     }
 }

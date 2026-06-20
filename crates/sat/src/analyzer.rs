@@ -1059,7 +1059,7 @@ fn render_accounts_summary(ctx: &AnalysisContext) {
         println!();
         println!(
             "  {} {}  {}",
-            "◼".blue(),
+            "-".blue(),
             accts.name.bold(),
             format!("{}:{}", accts.file.display(), accts.line).dimmed()
         );
@@ -1088,7 +1088,7 @@ fn render_accounts_summary(ctx: &AnalysisContext) {
 
             let tag_str = if tags.is_empty() { String::new() } else { format!(" [{}]", tags.join(", ")) };
 
-            println!("    {} {}: {}{}", "├╴".dimmed(), field.name, field.ty_name.dimmed(), tag_str);
+            println!("    {} {}: {}{}", "  -".dimmed(), field.name, field.ty_name.dimmed(), tag_str);
         }
     }
     println!();
@@ -1106,7 +1106,7 @@ fn render_instructions_summary(ctx: &AnalysisContext) {
         let disc = compute_discriminator_display(&ix.name);
         println!(
             "  {} {}  {}  {}",
-            "•".blue(),
+            "-".blue(),
             ix.name.bold(),
             disc.dimmed(),
             format!("{}:{}", ix.file.display(), ix.line).dimmed()
@@ -1148,7 +1148,7 @@ fn render_findings(all_findings: &[Finding]) {
                 println!("{} {} {}", format!("#{counter}").dimmed(), tag, finding.title.bold());
 
                 if let Some(ref location) = finding.location {
-                    println!("  {} {location}", "📍".dimmed());
+                    println!("  at {location}");
                 }
                 println!();
                 println!("  {}", finding.description);
@@ -1193,11 +1193,11 @@ fn render_summary(findings: &[Finding]) {
 
 fn severity_emoji(severity: Severity) -> String {
     match severity {
-        Severity::Critical => "🔴".to_string(),
-        Severity::High => "🟠".to_string(),
-        Severity::Medium => "🟡".to_string(),
-        Severity::Low => "🔵".to_string(),
-        Severity::Informational => "⚪".to_string(),
+        Severity::Critical => "[CRIT]".red().to_string(),
+        Severity::High => "[HIGH]".red().to_string(),
+        Severity::Medium => "[MED]".yellow().to_string(),
+        Severity::Low => "[LOW]".cyan().to_string(),
+        Severity::Informational => "[INFO]".cyan().to_string(),
     }
 }
 
