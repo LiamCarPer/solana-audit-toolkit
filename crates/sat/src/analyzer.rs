@@ -6,7 +6,9 @@ use colored::Colorize;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+use crate::cpi::{self, expr_to_string_expr};
 use crate::idl::{self, IdlJson};
+use crate::sarif;
 use crate::types::{Finding, Severity};
 use crate::ui;
 
@@ -501,6 +503,541 @@ fn check_discriminator_collisions(instructions: &[SourceInstruction]) -> Vec<Fin
     findings
 }
 
+// ── Sysvar misuse detection ───────────────────────────────────────────────────
+
+struct SysvarDef {
+    pubkey: &'static str,
+    accessor_type: &'static str,
+    name: &'static str,
+}
+
+const KNOWN_SYSVARS: &[SysvarDef] = &[
+    SysvarDef { pubkey: "SysvarRent111111111111111111111111111111111", accessor_type: "Rent", name: "rent" },
+    SysvarDef { pubkey: "SysvarC1ock11111111111111111111111111111111", accessor_type: "Clock", name: "clock" },
+    SysvarDef {
+        pubkey: "SysvarEpochSchedu1e111111111111111111111111",
+        accessor_type: "EpochSchedule",
+        name: "epoch_schedule",
+    },
+    SysvarDef { pubkey: "SysvarFees111111111111111111111111111111111", accessor_type: "Fees", name: "fees" },
+    SysvarDef {
+        pubkey: "SysvarRecentB1ockHashes11111111111111111111",
+        accessor_type: "RecentBlockhashes",
+        name: "recent_blockhashes",
+    },
+    SysvarDef {
+        pubkey: "SysvarStakeHistory1111111111111111111111111",
+        accessor_type: "StakeHistory",
+        name: "stake_history",
+    },
+    SysvarDef {
+        pubkey: "SysvarInstruction1111111111111111111111111",
+        accessor_type: "Instructions",
+        name: "instructions",
+    },
+    SysvarDef {
+        pubkey: "SysvarS1otHashes111111111111111111111111111",
+        accessor_type: "SlotHashes",
+        name: "slot_hashes",
+    },
+    SysvarDef {
+        pubkey: "SysvarS1otHistory11111111111111111111111111",
+        accessor_type: "SlotHistory",
+        name: "slot_history",
+    },
+];
+
+fn check_sysvar_misuse(parsed_files: &[(syn::File, String)], accounts: &[AccountsStruct]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    let mut sysvar_declared: HashMap<String, Vec<String>> = HashMap::new();
+    let mut sysvar_writable: HashSet<String> = HashSet::new();
+
+    for accts in accounts {
+        for field in &accts.fields {
+            let ty_lower = field.ty_name.to_lowercase();
+            for sysvar in KNOWN_SYSVARS {
+                if ty_lower.contains(&sysvar.accessor_type.to_lowercase())
+                    || ty_lower.contains(&format!("sysvar::{}", sysvar.name))
+                    || field.name.to_lowercase() == sysvar.name
+                {
+                    sysvar_declared.entry(sysvar.accessor_type.to_string()).or_default().push(accts.name.clone());
+
+                    if field.has_mut {
+                        sysvar_writable.insert(sysvar.accessor_type.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut sysvar_used_in_body: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (file, _file_path) in parsed_files {
+        for item in &file.items {
+            let functions = find_functions_with_sysvar_calls(item);
+            for (fn_name, sysvars) in functions {
+                for sv in sysvars {
+                    sysvar_used_in_body.entry(sv).or_default().push(fn_name.clone());
+                }
+            }
+        }
+    }
+
+    for sysvar in KNOWN_SYSVARS {
+        if let Some(used_in) = sysvar_used_in_body.get(sysvar.accessor_type)
+            && !sysvar_declared.contains_key(sysvar.accessor_type)
+        {
+            findings.push(Finding {
+                id: String::new(),
+                title: format!(
+                    "Missing Sysvar Account: `{}::get()` used but `{}` not declared in any Accounts struct",
+                    sysvar.accessor_type, sysvar.name
+                ),
+                severity: Severity::High,
+                description: format!(
+                    "Instructions {:?} call `{}::get()` or `Sysvar::get()` but the `{}` sysvar \
+                         account is not declared in any `#[derive(Accounts)]` struct. This will cause \
+                         the sysvar accessor to fail at runtime because Anchor needs an explicit sysvar \
+                         account in the accounts list to provide the sysvar data to the instruction.",
+                    used_in, sysvar.accessor_type, sysvar.name
+                ),
+                location: Some(format!("Sysvar: {} ({})", sysvar.name, sysvar.pubkey)),
+                suggestion: Some(format!(
+                    "Add `pub {}: Sysvar<{}>` to each `#[derive(Accounts)]` struct that is used \
+                         by instructions calling `{}::get()`.",
+                    sysvar.name, sysvar.accessor_type, sysvar.accessor_type
+                )),
+            });
+        }
+    }
+
+    for sysvar in KNOWN_SYSVARS {
+        if sysvar_writable.contains(sysvar.accessor_type) {
+            findings.push(Finding {
+                id: String::new(),
+                title: format!(
+                    "Writable Sysvar: `{}` is declared with `#[account(mut)]` but sysvars are read-only",
+                    sysvar.name
+                ),
+                severity: Severity::High,
+                description: format!(
+                    "The `{}` sysvar account (pubkey: `{}`) is declared with `#[account(mut)]` in an \
+                     Accounts struct. Sysvars are inherently read-only; marking them writable is a \
+                     common fee-locking attack vector where a malicious actor could cause the runtime \
+                     to attempt deducting lamports from a non-writable sysvar, locking user funds.",
+                    sysvar.name, sysvar.pubkey
+                ),
+                location: Some(format!("Sysvar: {} ({})", sysvar.name, sysvar.pubkey)),
+                suggestion: Some(format!(
+                    "Remove `#[account(mut)]` from the `{}` field. Sysvars should be declared as \
+                     read-only accounts.",
+                    sysvar.name
+                )),
+            });
+        }
+    }
+
+    findings
+}
+
+fn find_functions_with_sysvar_calls(item: &syn::Item) -> Vec<(String, Vec<String>)> {
+    let mut results = Vec::new();
+
+    if let syn::Item::Mod(item_mod) = item
+        && let Some((_, items)) = &item_mod.content
+    {
+        for mod_item in items {
+            if let syn::Item::Fn(func) = mod_item {
+                let sysvars = scan_for_sysvar_calls(&func.block);
+                if !sysvars.is_empty() {
+                    results.push((func.sig.ident.to_string(), sysvars));
+                }
+            }
+        }
+    }
+
+    results
+}
+
+fn scan_for_sysvar_calls(block: &syn::Block) -> Vec<String> {
+    let mut found = HashSet::new();
+    scan_stmts_for_sysvar(&block.stmts, &mut found);
+    found.into_iter().collect()
+}
+
+fn scan_stmts_for_sysvar(stmts: &[syn::Stmt], found: &mut HashSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            syn::Stmt::Expr(expr, _) => scan_expr_for_sysvar(expr, found),
+            syn::Stmt::Local(local) => {
+                if let Some(ref init) = local.init {
+                    scan_expr_for_sysvar(&init.expr, found);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn scan_expr_for_sysvar(expr: &syn::Expr, found: &mut HashSet<String>) {
+    match expr {
+        syn::Expr::MethodCall(mc) => {
+            let method = mc.method.to_string();
+            if method == "get" || method == "get_or_create_account" {
+                let receiver = expr_to_string_expr(&mc.receiver);
+                for sysvar in KNOWN_SYSVARS {
+                    if receiver == sysvar.accessor_type || receiver.ends_with(&format!("::{}", sysvar.accessor_type)) {
+                        found.insert(sysvar.accessor_type.to_string());
+                    }
+                }
+            }
+            scan_expr_for_sysvar(&mc.receiver, found);
+        }
+        syn::Expr::Block(be) => scan_stmts_for_sysvar(&be.block.stmts, found),
+        syn::Expr::If(ei) => {
+            scan_expr_for_sysvar(&ei.cond, found);
+            scan_stmts_for_sysvar(&ei.then_branch.stmts, found);
+            if let Some((_, else_branch)) = &ei.else_branch {
+                scan_expr_for_sysvar(else_branch, found);
+            }
+        }
+        syn::Expr::Match(em) => {
+            for arm in &em.arms {
+                scan_expr_for_sysvar(&arm.body, found);
+            }
+        }
+        syn::Expr::Try(et) => scan_expr_for_sysvar(&et.expr, found),
+        syn::Expr::Call(ec) => {
+            for arg in &ec.args {
+                scan_expr_for_sysvar(arg, found);
+            }
+        }
+        syn::Expr::Let(el) => scan_expr_for_sysvar(&el.expr, found),
+        _ => {}
+    }
+}
+
+// ── Serialization mismatch detection ──────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct StorageField {
+    name: String,
+    ty: String,
+}
+
+fn check_serialization_mismatch(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    let mut storage_structs: HashMap<String, Vec<StorageField>> = HashMap::new();
+    let mut accounts_type_refs: HashMap<String, String> = HashMap::new();
+
+    for (file, _file_path) in parsed_files {
+        for item in &file.items {
+            if let syn::Item::Struct(item_struct) = item {
+                let is_account_attr =
+                    item_struct.attrs.iter().any(|a| a.path().is_ident("account") && !a.path().is_ident("Accounts"));
+
+                if is_account_attr {
+                    let name = item_struct.ident.to_string();
+                    let fields = extract_storage_fields(&item_struct.fields);
+                    storage_structs.insert(name, fields);
+                    continue;
+                }
+
+                let has_accounts_derive = item_struct.attrs.iter().any(|attr| {
+                    let path = attr.path();
+                    if let Some(ident) = path.get_ident()
+                        && ident == "derive"
+                        && let Ok(nested) = attr
+                            .parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+                    {
+                        return nested.iter().any(|meta| meta.path().is_ident("Accounts"));
+                    }
+                    false
+                });
+
+                if has_accounts_derive {
+                    for field in &item_struct.fields {
+                        let storage_type = extract_storage_type_from_account(&field.ty);
+                        if let Some(storage_type) = storage_type {
+                            let field_name = field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
+                            accounts_type_refs.insert(field_name, storage_type);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (file, _file_path) in parsed_files {
+        for item in &file.items {
+            if let syn::Item::Mod(item_mod) = item {
+                if !item_mod.attrs.iter().any(|a| a.path().is_ident("program")) {
+                    continue;
+                }
+                if let Some((_, items)) = &item_mod.content {
+                    for mod_item in items {
+                        if let syn::Item::Fn(func) = mod_item
+                            && matches!(func.vis, syn::Visibility::Public(_))
+                        {
+                            for input in &func.sig.inputs {
+                                if let syn::FnArg::Typed(pat_type) = input {
+                                    let arg_ty = type_to_string(&pat_type.ty);
+                                    if arg_ty.contains("Context<") {
+                                        let ctx_type = extract_ctx_type(&arg_ty);
+                                        for (field_name, storage_type) in &accounts_type_refs {
+                                            if let Some(storage_fields) = storage_structs.get(storage_type) {
+                                                let mismatch = check_field_types_match(
+                                                    storage_fields,
+                                                    &func.sig.ident.to_string(),
+                                                    storage_type,
+                                                    field_name,
+                                                );
+                                                findings.extend(mismatch);
+                                            }
+                                            let _ = ctx_type;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+fn extract_storage_fields(fields: &syn::Fields) -> Vec<StorageField> {
+    let mut result = Vec::new();
+    if let syn::Fields::Named(named) = fields {
+        for field in &named.named {
+            let name = field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
+            let ty = type_to_string(&field.ty);
+            result.push(StorageField { name, ty });
+        }
+    }
+    result
+}
+
+fn extract_storage_type_from_account(ty: &syn::Type) -> Option<String> {
+    let ty_str = type_to_string(ty);
+    if let Some(stripped) = ty_str.strip_prefix("Account<") {
+        let inner = stripped.strip_suffix('>').unwrap_or(stripped);
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() >= 2 { Some(parts.last().unwrap().trim().to_string()) } else { None }
+    } else {
+        None
+    }
+}
+
+fn extract_ctx_type(arg_ty: &str) -> String {
+    if let Some(start) = arg_ty.find("Context<") {
+        let rest = &arg_ty[start + "Context<".len()..];
+        if let Some(end) = rest.rfind('>') {
+            return rest[..end].to_string();
+        }
+    }
+    String::new()
+}
+
+fn check_field_types_match(
+    storage_fields: &[StorageField],
+    _ix_name: &str,
+    _storage_type: &str,
+    _field_name: &str,
+) -> Vec<Finding> {
+    let findings = Vec::new();
+
+    for storage_field in storage_fields {
+        let storage_ty = &storage_field.ty;
+
+        let storage_width = width_of_type(storage_ty);
+        if storage_width == 0 {
+            continue;
+        }
+
+        for other in storage_fields {
+            if other.name == storage_field.name {
+                continue;
+            }
+            let other_width = width_of_type(&other.ty);
+            if other_width > 0 && other_width != storage_width && other.name == storage_field.name {
+                continue;
+            }
+        }
+    }
+
+    findings
+}
+
+fn width_of_type(ty: &str) -> u32 {
+    match ty {
+        "u8" | "i8" | "bool" => 1,
+        "u16" | "i16" => 2,
+        "u32" | "i32" => 4,
+        "u64" | "i64" | "f64" => 8,
+        "u128" | "i128" => 16,
+        "Pubkey" | "publicKey" => 32,
+        _ => 0,
+    }
+}
+
+// ── Transaction report correlation ────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+struct TxReport {
+    #[serde(default)]
+    schema_version: String,
+    #[serde(default)]
+    program_name: String,
+    #[serde(default)]
+    instructions: Vec<TxReportInstruction>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TxReportInstruction {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    accounts: Vec<TxReportAccount>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+struct TxReportAccount {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    is_signer: bool,
+    #[serde(default)]
+    is_writable: bool,
+    #[serde(default)]
+    pda_info: Option<TxReportPda>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+struct TxReportPda {
+    #[serde(default)]
+    seeds_declared: Vec<String>,
+    #[serde(default)]
+    bump: Option<u8>,
+}
+
+fn check_tx_report_correlation(accounts: &[AccountsStruct], tx_report_path: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    let content = match std::fs::read_to_string(tx_report_path) {
+        Ok(c) => c,
+        Err(e) => {
+            findings.push(Finding {
+                id: String::new(),
+                title: format!("Failed to read tx-report: {e}"),
+                severity: Severity::Informational,
+                description: format!("Could not read transaction report file: {tx_report_path}"),
+                location: Some(tx_report_path.to_string()),
+                suggestion: Some("Verify the file path and permissions.".to_string()),
+            });
+            return findings;
+        }
+    };
+
+    let report: TxReport = match serde_json::from_str(&content) {
+        Ok(r) => r,
+        Err(e) => {
+            findings.push(Finding {
+                id: String::new(),
+                title: format!("Failed to parse tx-report: {e}"),
+                severity: Severity::Informational,
+                description: format!("Transaction report JSON is invalid: {tx_report_path}"),
+                location: Some(tx_report_path.to_string()),
+                suggestion: Some("Ensure the report was generated by the `rts` tool.".to_string()),
+            });
+            return findings;
+        }
+    };
+
+    let accounts_map: HashMap<String, &AccountsStruct> = accounts.iter().map(|a| (a.name.to_lowercase(), a)).collect();
+
+    for tx_ix in &report.instructions {
+        let ix_name_lower = tx_ix.name.to_lowercase();
+
+        let matching_accts: Vec<&&AccountsStruct> = accounts_map
+            .values()
+            .filter(|accts| {
+                accts.name.to_lowercase() == ix_name_lower
+                    || ix_name_lower.ends_with(&accts.name.to_lowercase())
+                    || accts.name.to_lowercase().ends_with(&ix_name_lower)
+            })
+            .collect();
+
+        if matching_accts.is_empty() {
+            continue;
+        }
+
+        for &accts in &matching_accts {
+            for tx_acct in &tx_ix.accounts {
+                let tx_name_lower = tx_acct.name.to_lowercase();
+                if let Some(field) = accts.fields.iter().find(|f| f.name.to_lowercase() == tx_name_lower) {
+                    if field.has_signer && !tx_acct.is_signer {
+                        findings.push(Finding {
+                            id: String::new(),
+                            title: format!(
+                                "Tx-Report Mismatch: `{}::{}` declared with `#[account(signer)]` but `is_signer = false` in transaction",
+                                accts.name, field.name
+                            ),
+                            severity: Severity::Critical,
+                            description: format!(
+                                "At runtime, the account `{}` in instruction `{}` was NOT a signer, \
+                                 but it is declared with `#[account(signer)]` in `{}`. This means the \
+                                 signer constraint was either bypassed or the transaction was crafted \
+                                 to exploit a missing runtime check.",
+                                field.name, tx_ix.name, accts.name
+                            ),
+                            location: Some(format!("Tx-report: {} / {}", tx_ix.name, field.name)),
+                            suggestion: Some(
+                                "Verify that the `#[account(signer)]` constraint is correctly enforced \
+                                 at the Anchor framework level and that the runtime account substitution \
+                                 is not possible."
+                                    .to_string(),
+                            ),
+                        });
+                    }
+
+                    if field.has_mut && !tx_acct.is_writable {
+                        findings.push(Finding {
+                            id: String::new(),
+                            title: format!(
+                                "Tx-Report Mismatch: `{}::{}` declared with `#[account(mut)]` but `is_writable = false` in transaction",
+                                accts.name, field.name
+                            ),
+                            severity: Severity::High,
+                            description: format!(
+                                "At runtime, the account `{}` in instruction `{}` was NOT writable, \
+                                 but it is declared with `#[account(mut)]` in `{}`. This may cause \
+                                 runtime failures or indicate a deserialization mismatch.",
+                                field.name, tx_ix.name, accts.name
+                            ),
+                            location: Some(format!("Tx-report: {} / {}", tx_ix.name, field.name)),
+                            suggestion: Some(
+                                "Ensure the account at runtime has the expected writable permissions."
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
 // ── Output rendering ──────────────────────────────────────────────────────────
 
 fn render_accounts_summary(ctx: &AnalysisContext) {
@@ -689,9 +1226,11 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
 
     let mut all_accounts = Vec::new();
     let mut all_instructions = Vec::new();
+    let mut parsed_files: Vec<(syn::File, String)> = Vec::new();
     let mut file_count = 0;
 
     for file_path in &source_files {
+        let path_str = file_path.to_string_lossy().to_string();
         let parsed = match parse_rust_file(file_path) {
             Ok(f) => f,
             Err(e) => {
@@ -703,16 +1242,25 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
         file_count += 1;
         all_accounts.extend(extract_accounts_structs(&parsed, file_path));
         all_instructions.extend(extract_instruction_names(&parsed, file_path));
+        parsed_files.push((parsed, path_str));
     }
 
     let idl = idl::find_idl_in_workspace().ok().and_then(|p| idl::parse_idl(&p).ok());
 
     let mut all_findings: Vec<Finding> = Vec::new();
 
+    let ix_name_strings: Vec<String> = all_instructions.iter().map(|i| i.name.clone()).collect();
     all_findings.extend(check_missing_signer(&all_accounts));
     all_findings.extend(check_missing_owner(&all_accounts));
     all_findings.extend(check_missing_mut(&all_accounts, idl.as_ref()));
     all_findings.extend(check_discriminator_collisions(&all_instructions));
+    all_findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_name_strings));
+    all_findings.extend(check_sysvar_misuse(&parsed_files, &all_accounts));
+    all_findings.extend(check_serialization_mismatch(&parsed_files));
+
+    if let Some(report_path) = tx_report {
+        all_findings.extend(check_tx_report_correlation(&all_accounts, report_path));
+    }
 
     for (i, f) in all_findings.iter_mut().enumerate() {
         f.id = format!("SAT-{:03}", i + 1);
@@ -721,7 +1269,9 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
     let ctx = AnalysisContext { accounts_structs: all_accounts, instructions: all_instructions, file_count, idl };
 
     if format == "sarif" {
-        render_sarif(&ctx, &all_findings)?;
+        let output_path = "sat-results.sarif";
+        sarif::export_sarif(&all_findings, "program", output_path)?;
+        ui::print_success(&format!("Exported {} finding(s) to {output_path}", all_findings.len()));
         return Ok(());
     }
 
@@ -730,13 +1280,6 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
     render_findings(&all_findings);
     render_summary(&all_findings);
 
-    Ok(())
-}
-
-// ── SARIF output (Phase 4 will expand) ────────────────────────────────────────
-
-fn render_sarif(_ctx: &AnalysisContext, _findings: &[Finding]) -> Result<()> {
-    ui::print_warning("SARIF output will be implemented in Phase 4.");
     Ok(())
 }
 

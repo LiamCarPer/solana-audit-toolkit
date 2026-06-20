@@ -2,9 +2,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod analyzer;
+mod cpi;
 mod fuzzer;
 mod idl;
 mod reporter;
+mod sarif;
 mod types;
 mod ui;
 

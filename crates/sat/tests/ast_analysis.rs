@@ -291,3 +291,47 @@ pub struct Simple<'info> {
     assert!(!data.has_init);
     assert!(!data.has_owner);
 }
+
+#[test]
+fn test_sarif_export_produces_valid_json() {
+    use sat::sarif;
+    use sat::types::{Finding, Severity};
+    use std::fs;
+
+    let findings = vec![Finding {
+        id: "SAT-001".to_string(),
+        title: "Missing Signer".to_string(),
+        severity: Severity::High,
+        description: "Test finding".to_string(),
+        location: Some("test.rs:1".to_string()),
+        suggestion: Some("Fix it".to_string()),
+    }];
+
+    let output_path = "/tmp/sat_test_sarif.json";
+    sarif::export_sarif(&findings, "test_program", output_path).unwrap();
+
+    let content = fs::read_to_string(output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+    assert_eq!(parsed["version"], "2.1.0");
+    assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "sat");
+
+    fs::remove_file(output_path).unwrap();
+}
+
+#[test]
+fn test_sarif_empty_findings() {
+    use sat::sarif;
+    use std::fs;
+
+    let findings: Vec<sat::types::Finding> = vec![];
+    let output_path = "/tmp/sat_test_empty.sarif";
+    sarif::export_sarif(&findings, "test", output_path).unwrap();
+
+    let content = fs::read_to_string(output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 0);
+
+    fs::remove_file(output_path).unwrap();
+}
