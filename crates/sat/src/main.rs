@@ -5,9 +5,13 @@ mod analyzer;
 mod cpi;
 mod fuzzer;
 mod idl;
+mod render;
 mod reporter;
 mod sarif;
+mod serialization;
+mod sysvar;
 mod token2022;
+mod tx_report;
 mod types;
 mod ui;
 

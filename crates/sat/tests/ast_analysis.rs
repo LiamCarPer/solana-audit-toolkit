@@ -335,3 +335,79 @@ fn test_sarif_empty_findings() {
 
     fs::remove_file(output_path).unwrap();
 }
+
+#[test]
+fn test_fixture_missing_auth_finds_issues() {
+    use std::fs;
+    let path = "tests/fixtures_ast/vulnerable/missing_auth.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (accounts, instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    assert!(!accounts.is_empty(), "should find Accounts structs");
+    assert_eq!(instructions.len(), 3, "should find 3 instruction handlers");
+
+    let signer_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Signer")).collect();
+    let owner_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Owner")).collect();
+
+    assert!(!signer_findings.is_empty(), "missing_auth fixture should have signer issues");
+    assert!(!owner_findings.is_empty(), "missing_auth fixture should have owner issues");
+}
+
+#[test]
+fn test_fixture_missing_owner_finds_issues() {
+    use std::fs;
+    let path = "tests/fixtures_ast/vulnerable/missing_owner.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (accounts, instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    assert_eq!(accounts.len(), 2, "should find 2 Accounts structs");
+    assert_eq!(instructions.len(), 1);
+
+    let owner_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Owner")).collect();
+    assert!(!owner_findings.is_empty(), "missing_owner fixture should have AccountInfo without owner");
+    assert!(owner_findings.len() >= 2, "should flag both AccountInfo and UncheckedAccount");
+}
+
+#[test]
+fn test_fixture_clean_produces_no_false_positives() {
+    use std::fs;
+    let path = "tests/fixtures_ast/clean/clean_program.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    let signer_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Signer")).collect();
+    let owner_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Owner")).collect();
+
+    assert!(signer_findings.is_empty(), "clean fixture should have no missing signer findings");
+    assert!(owner_findings.is_empty(), "clean fixture should have no missing owner findings");
+}
+
+#[test]
+fn test_fixture_sysvar_issues_parses() {
+    use std::fs;
+    let path = "tests/fixtures_ast/vulnerable/sysvar_issues.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    assert!(!accounts.is_empty(), "sysvar fixture should parse and find Accounts structs");
+    let get_time = accounts.iter().find(|a| a.name == "GetTime").unwrap();
+    assert!(get_time.fields.iter().any(|f| f.name == "authority"));
+}
+
+#[test]
+fn test_all_fixture_files_parse() {
+    use std::fs;
+    let dirs = ["tests/fixtures_ast/vulnerable", "tests/fixtures_ast/clean"];
+    for dir in &dirs {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "rs") {
+                    let source = fs::read_to_string(&path).unwrap();
+                    let result = std::panic::catch_unwind(|| sat::analyzer::analyze_string_for_test(&source));
+                    assert!(result.is_ok(), "should parse {} without panicking", path.display());
+                }
+            }
+        }
+    }
+}

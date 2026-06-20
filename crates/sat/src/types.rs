@@ -32,10 +32,3 @@ pub struct Finding {
     pub location: Option<String>,
     pub suggestion: Option<String>,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnalysisTarget {
-    Idl,
-    Source,
-    All,
-}

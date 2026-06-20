@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::analyzer::AccountsStruct;
 use crate::types::{Finding, Severity};
+use quote::quote;
 
 pub const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
@@ -115,8 +116,9 @@ pub fn detect_token2022_in_source(
     (found_program_id || found_token2022_usage, findings, token2022_transfer_instructions)
 }
 
-fn extract_body_source(_file_source: &str, _func: &syn::ItemFn) -> String {
-    _file_source.to_string()
+fn extract_body_source(_file_source: &str, func: &syn::ItemFn) -> String {
+    let block = &func.block;
+    quote!(#block).to_string()
 }
 
 // ── Account type detection ────────────────────────────────────────────────────
