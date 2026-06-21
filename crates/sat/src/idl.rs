@@ -180,6 +180,10 @@ impl InstructionInfo {
     pub fn is_writable_for(&self, state_name: &str) -> bool {
         self.writable_states.contains(&state_name.to_string())
     }
+    pub fn is_state_pda(&self, state_name: &str) -> bool {
+        let lower = state_name.to_lowercase();
+        self.target_accounts.iter().any(|a| a.name.to_lowercase() == lower && a.is_pda)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -497,6 +501,10 @@ fn check_reinitialization(states: &[StateInfo], instructions: &[InstructionInfo]
     for ix in instructions.iter().filter(|i| i.role == InstructionRole::Initializer) {
         for state_name in &ix.writable_states {
             if let Some(state) = state_map.get(state_name.as_str()) {
+                if ix.is_state_pda(state_name) {
+                    continue;
+                }
+
                 if !state.has_init_flag {
                     if state.has_status_enum && state.status_variants.len() < 2 {
                         continue;

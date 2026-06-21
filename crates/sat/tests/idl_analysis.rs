@@ -212,9 +212,16 @@ fn test_governance_analysis_complete() {
 
     assert!(!all_findings.is_empty(), "governance should produce some findings");
 
+    let reinit_governance =
+        all_findings.iter().any(|f| f.title.contains("Governance") && f.title.contains("Reinitialization"));
+    assert!(reinit_governance, "Governance has no isInitialized flag and no PDA seeds, should flag reinitialization");
+
     let reinit_proposal =
         all_findings.iter().any(|f| f.title.contains("ProposalState") && f.title.contains("Reinitialization"));
-    assert!(reinit_proposal, "ProposalState has no isInitialized flag, should flag reinitialization");
+    assert!(
+        !reinit_proposal,
+        "ProposalState has PDA seeds — guarded by Anchor's #[account(init)] via discriminator bytes"
+    );
 }
 
 #[test]

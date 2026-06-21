@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -33,6 +33,7 @@ pub struct AccountField {
     pub has_mut: bool,
     pub has_init: bool,
     pub has_owner: bool,
+    pub has_seeds: bool,
     pub owner_value: Option<String>,
     pub is_account_info: bool,
     pub is_unchecked_account: bool,
@@ -42,6 +43,7 @@ pub struct AccountField {
 #[derive(Debug, Clone)]
 pub struct SourceInstruction {
     pub name: String,
+    pub program_name: String,
     pub file: PathBuf,
     pub line: usize,
 }
@@ -124,6 +126,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                 let mut has_mut = false;
                 let mut has_init = false;
                 let mut has_owner = false;
+                let mut has_seeds = false;
                 let mut owner_value = None;
 
                 for attr in &field.attrs {
@@ -132,6 +135,9 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                         has_signer = parsed.flags.contains("signer");
                         has_mut = parsed.flags.contains("mut");
                         has_init = parsed.flags.contains("init");
+                        if parsed.key_values.contains_key("seeds") {
+                            has_seeds = true;
+                        }
                         if let Some(val) = parsed.key_values.get("owner") {
                             has_owner = true;
                             owner_value = Some(val.clone());
@@ -151,6 +157,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                     has_mut,
                     has_init,
                     has_owner,
+                    has_seeds,
                     owner_value,
                     is_account_info,
                     is_unchecked_account,
@@ -180,6 +187,8 @@ fn extract_instruction_names(file: &syn::File, file_path: &Path) -> Vec<SourceIn
                 continue;
             }
 
+            let program_name = item_mod.ident.to_string();
+
             if let Some((_, items)) = &item_mod.content {
                 for mod_item in items {
                     if let syn::Item::Fn(func) = mod_item
@@ -187,6 +196,7 @@ fn extract_instruction_names(file: &syn::File, file_path: &Path) -> Vec<SourceIn
                     {
                         instructions.push(SourceInstruction {
                             name: func.sig.ident.to_string(),
+                            program_name: program_name.clone(),
                             file: file_path.to_path_buf(),
                             line: 0,
                         });
@@ -325,7 +335,7 @@ fn check_missing_signer(accounts: &[AccountsStruct]) -> Vec<Finding> {
                 || name_lower.ends_with("_admin")
                 || name_lower.ends_with("_owner");
 
-            if looks_like_authority && !field.has_signer && !field.is_signer_type {
+            if looks_like_authority && !field.has_signer && !field.is_signer_type && !field.has_seeds {
                 let (severity, title_suffix) = if field.has_mut {
                     (Severity::High, "authority field is mutable but not marked as signer")
                 } else {
@@ -365,7 +375,7 @@ fn check_missing_owner(accounts: &[AccountsStruct]) -> Vec<Finding> {
                 continue;
             }
 
-            if field.has_init || field.has_signer {
+            if field.has_init || field.has_signer || field.has_seeds {
                 continue;
             }
 
@@ -469,36 +479,54 @@ fn check_missing_mut(accounts: &[AccountsStruct], idl: Option<&IdlJson>) -> Vec<
 
 fn check_discriminator_collisions(instructions: &[SourceInstruction]) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let mut seen: BTreeMap<Vec<u8>, Vec<&SourceInstruction>> = BTreeMap::new();
 
     for ix in instructions {
         let preimage = format!("global:{}", ix.name);
         let hash = Sha256::digest(preimage.as_bytes());
         let discriminator: Vec<u8> = hash[..8].to_vec();
-        seen.entry(discriminator).or_default().push(ix);
-    }
 
-    for (disc, ixs) in &seen {
-        if ixs.len() > 1 {
-            let hex_disc: String = disc.iter().map(|b| format!("{b:02x}")).collect();
-            let names: Vec<&str> = ixs.iter().map(|i| i.name.as_str()).collect();
-            findings.push(Finding {
-                id: String::new(),
-                title: format!(
-                    "Anchor Discriminator Collision: instructions {:?} share discriminator 0x{hex_disc}",
-                    names
-                ),
-                severity: Severity::Critical,
-                description: format!(
-                    "The instructions {:?} produce the same 8-byte Anchor discriminator `0x{hex_disc}` \
-                     (sha256(\"global:<instruction_name>\")[0..8]). At runtime, the first matching \
-                     instruction handler in the dispatch table will execute — potentially for the wrong \
-                     instruction.",
-                    names
-                ),
-                location: Some("Source: #[program] module".to_string()),
-                suggestion: Some("Rename one of the colliding instructions. Even a minor name change will produce a different discriminator hash.".to_string()),
-            });
+        let collisions: Vec<&SourceInstruction> = instructions
+            .iter()
+            .filter(|other| {
+                other.program_name == ix.program_name && other.name != ix.name && {
+                    let other_hash = Sha256::digest(format!("global:{}", other.name).as_bytes());
+                    other_hash[..8].to_vec() == discriminator
+                }
+            })
+            .collect();
+
+        if !collisions.is_empty() {
+            let hex_disc: String = discriminator.iter().map(|b| format!("{b:02x}")).collect();
+            let mut names: Vec<&str> = vec![ix.name.as_str()];
+            names.extend(collisions.iter().map(|c| c.name.as_str()));
+            names.sort();
+            names.dedup();
+
+            let title = format!(
+                "Anchor Discriminator Collision: instructions {:?} share discriminator 0x{hex_disc} in program `{}`",
+                names, ix.program_name
+            );
+
+            if !findings.iter().any(|f: &Finding| f.title == title) {
+                findings.push(Finding {
+                    id: String::new(),
+                    title,
+                    severity: Severity::Critical,
+                    description: format!(
+                        "The instructions {:?} produce the same 8-byte Anchor discriminator `0x{hex_disc}` \
+                         (sha256(\"global:<instruction_name>\")[0..8]) within program `{}`. At runtime, \
+                         the first matching instruction handler in the dispatch table will execute — \
+                         potentially for the wrong instruction.",
+                        names, ix.program_name
+                    ),
+                    location: Some(format!("Source: #[program] module `{}`", ix.program_name)),
+                    suggestion: Some(
+                        "Rename one of the colliding instructions. Even a minor name change will produce \
+                         a different discriminator hash."
+                            .to_string(),
+                    ),
+                });
+            }
         }
     }
 
