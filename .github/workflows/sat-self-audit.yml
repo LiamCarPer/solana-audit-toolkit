@@ -5,16 +5,16 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
-      - 'src/**'
   pull_request:
     branches: [main]
     paths:
       - 'crates/**'
-      - 'src/**'
 
 jobs:
   self-audit:
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,7 +32,7 @@ jobs:
       - name: Export SARIF results
         run: cargo run --release -- analyze src crates/sat/src --format sarif
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: sat-results.sarif

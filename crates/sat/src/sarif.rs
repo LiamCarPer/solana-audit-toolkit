@@ -7,6 +7,7 @@ use crate::types::{Finding, Severity};
 
 #[derive(Debug, Serialize)]
 #[allow(private_interfaces)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifLog {
     pub version: String,
     #[serde(rename = "$schema")]
@@ -15,17 +16,20 @@ pub struct SarifLog {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifRun {
     pub tool: SarifTool,
     pub results: Vec<SarifResult>,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifTool {
     pub driver: SarifDriver,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifDriver {
     pub name: String,
     pub version: String,
@@ -34,6 +38,7 @@ pub(crate) struct SarifDriver {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifRule {
     pub id: String,
     pub short_description: SarifMessage,
@@ -42,11 +47,13 @@ pub(crate) struct SarifRule {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifDefaultConfig {
     pub level: String,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifResult {
     pub rule_id: String,
     pub rule_index: usize,
@@ -56,27 +63,32 @@ pub(crate) struct SarifResult {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifMessage {
     pub text: String,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifLocation {
     pub physical_location: SarifPhysicalLocation,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifPhysicalLocation {
     pub artifact_location: SarifArtifactLocation,
     pub region: SarifRegion,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifArtifactLocation {
     pub uri: String,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SarifRegion {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_line: Option<u32>,
