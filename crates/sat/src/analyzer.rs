@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+use syn::spanned::Spanned;
 use walkdir::WalkDir;
 
 use crate::cpi;
@@ -48,6 +49,8 @@ pub struct SourceInstruction {
     pub file: PathBuf,
     pub line: usize,
 }
+
+type StorageFieldMap = HashMap<String, HashSet<String>>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AnalysisContext {
@@ -121,6 +124,11 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
 
             for field in &item_struct.fields {
                 let field_name = field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
+                let field_line = field
+                    .ident
+                    .as_ref()
+                    .map(|ident| ident.span().start().line)
+                    .unwrap_or_else(|| field.span().start().line);
                 let ty_name = type_to_string(&field.ty);
 
                 let mut has_signer = false;
@@ -157,7 +165,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                 fields.push(AccountField {
                     name: field_name,
                     ty_name,
-                    line: 0,
+                    line: field_line,
                     has_signer,
                     has_mut,
                     has_init,
@@ -174,7 +182,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
             structs.push(AccountsStruct {
                 name: item_struct.ident.to_string(),
                 file: file_path.to_path_buf(),
-                line: 0,
+                line: item_struct.ident.span().start().line,
                 fields,
             });
         }
@@ -204,7 +212,7 @@ fn extract_instruction_names(file: &syn::File, file_path: &Path) -> Vec<SourceIn
                             name: func.sig.ident.to_string(),
                             program_name: program_name.clone(),
                             file: file_path.to_path_buf(),
-                            line: 0,
+                            line: func.sig.ident.span().start().line,
                         });
                     }
                 }
@@ -213,6 +221,29 @@ fn extract_instruction_names(file: &syn::File, file_path: &Path) -> Vec<SourceIn
     }
 
     instructions
+}
+
+fn extract_account_storage_fields(file: &syn::File) -> StorageFieldMap {
+    let mut storage_fields = HashMap::new();
+
+    for item in &file.items {
+        if let syn::Item::Struct(item_struct) = item {
+            let is_anchor_account = item_struct.attrs.iter().any(|attr| attr.path().is_ident("account"));
+            if !is_anchor_account {
+                continue;
+            }
+
+            let fields = item_struct
+                .fields
+                .iter()
+                .filter_map(|field| field.ident.as_ref().map(|ident| ident.to_string().to_lowercase()))
+                .collect();
+
+            storage_fields.insert(item_struct.ident.to_string(), fields);
+        }
+    }
+
+    storage_fields
 }
 
 // ── Attribute parsing ─────────────────────────────────────────────────────────
@@ -546,14 +577,16 @@ fn check_discriminator_collisions(instructions: &[SourceInstruction]) -> Vec<Fin
     findings
 }
 
-fn check_missing_has_one(accounts: &[AccountsStruct]) -> Vec<Finding> {
+fn check_missing_has_one(accounts: &[AccountsStruct], storage_fields: &StorageFieldMap) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let authority_signer_names: HashSet<&str> =
         ["authority", "admin", "owner", "creator", "manager", "operator", "governor"].iter().copied().collect();
 
     for accts in accounts {
-        // Collect all Account<T> fields that have `mut` and store has_one values
+        // Collect mutable Account<T> fields whose local storage struct contains an
+        // authority-like field. This keeps the check high-signal and avoids flagging
+        // generic mutable accounts that do not store ownership.
         let typed_mut_fields: Vec<&AccountField> = accts
             .fields
             .iter()
@@ -563,6 +596,7 @@ fn check_missing_has_one(accounts: &[AccountsStruct]) -> Vec<Finding> {
                     && !f.is_signer_type
                     && f.ty_name.starts_with("Account<")
                     && f.has_mut
+                    && field_inner_account_type(f).is_some_and(|inner| storage_fields.contains_key(inner.as_str()))
             })
             .collect();
 
@@ -584,14 +618,24 @@ fn check_missing_has_one(accounts: &[AccountsStruct]) -> Vec<Finding> {
             .collect();
 
         for signer in &authority_signers {
-            // Check if ANY Account<T> field has `has_one` referencing this signer
+            let relevant_state_fields: Vec<&AccountField> = typed_mut_fields
+                .iter()
+                .copied()
+                .filter(|field| mutable_account_stores_authority(field, signer, storage_fields))
+                .collect();
+
+            if relevant_state_fields.is_empty() {
+                continue;
+            }
+
+            // Check if ANY relevant Account<T> field has `has_one` referencing this signer
             let has_link = typed_mut_fields
                 .iter()
                 .any(|f| f.has_one_values.iter().any(|v| v.to_lowercase() == signer.name.to_lowercase()));
 
             if !has_link {
                 // Find which Account<T> field likely stores this authority
-                let likely_field = typed_mut_fields.first();
+                let likely_field = relevant_state_fields.first();
 
                 findings.push(Finding {
                     id: String::new(),
@@ -624,6 +668,41 @@ fn check_missing_has_one(accounts: &[AccountsStruct]) -> Vec<Finding> {
     findings
 }
 
+fn field_inner_account_type(field: &AccountField) -> Option<String> {
+    let ty = field.ty_name.trim();
+    let account_prefix = "Account<";
+
+    let inner = if let Some(stripped) = ty.strip_prefix(account_prefix) {
+        stripped.strip_suffix('>').unwrap_or(stripped)
+    } else if let Some(start) = ty.find("Account<") {
+        let stripped = &ty[start + account_prefix.len()..];
+        stripped.strip_suffix('>').unwrap_or(stripped)
+    } else {
+        return None;
+    };
+
+    inner.split(',').next_back().map(|part| part.trim().to_string()).filter(|part| !part.is_empty())
+}
+
+fn mutable_account_stores_authority(
+    account_field: &AccountField,
+    signer: &AccountField,
+    storage_fields: &StorageFieldMap,
+) -> bool {
+    let Some(inner_type) = field_inner_account_type(account_field) else {
+        return false;
+    };
+    let Some(fields) = storage_fields.get(&inner_type) else {
+        return false;
+    };
+
+    let signer_name = signer.name.to_lowercase();
+    let mut candidates = vec![signer_name.as_str()];
+    candidates.extend(["authority", "admin", "owner", "governor", "manager", "operator"]);
+
+    candidates.iter().any(|candidate| fields.contains(*candidate))
+}
+
 fn check_reinit_risk(accounts: &[AccountsStruct], instructions: &[SourceInstruction]) -> Vec<Finding> {
     let mut findings = Vec::new();
 
@@ -649,7 +728,12 @@ fn check_reinit_risk(accounts: &[AccountsStruct], instructions: &[SourceInstruct
         }
 
         for field in &accts.fields {
-            if field.has_mut && !field.has_init && !field.has_signer && !field.is_signer_type {
+            if field.has_mut
+                && !field.has_init
+                && !field.has_signer
+                && !field.is_signer_type
+                && is_reinit_sensitive_field(field)
+            {
                 let accts_stripped = accts_lower.replace('_', "");
                 let instruction_matches = init_instructions
                     .iter()
@@ -694,6 +778,33 @@ fn check_reinit_risk(accounts: &[AccountsStruct], instructions: &[SourceInstruct
     }
 
     findings
+}
+
+fn is_reinit_sensitive_field(field: &AccountField) -> bool {
+    if field.is_account_info || field.is_unchecked_account {
+        return true;
+    }
+
+    let Some(inner_type) = field_inner_account_type(field) else {
+        return false;
+    };
+
+    let lower_inner = inner_type.to_lowercase();
+    let lower_name = field.name.to_lowercase();
+
+    let excluded_inner_types = ["tokenaccount", "mint", "systemaccount"];
+    if excluded_inner_types.iter().any(|excluded| lower_inner == *excluded) {
+        return false;
+    }
+
+    lower_name.contains("state")
+        || lower_name.contains("config")
+        || lower_name.contains("vault")
+        || lower_name.contains("pool")
+        || lower_inner.contains("state")
+        || lower_inner.contains("config")
+        || lower_inner.contains("vault")
+        || lower_inner.contains("pool")
 }
 
 fn check_unsafe_arithmetic(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
@@ -742,6 +853,7 @@ fn find_unsafe_ops_in_block(block: &syn::Block, fn_name: &str, file: &str, findi
 fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings: &mut Vec<Finding>) {
     match expr {
         syn::Expr::Binary(binary) => {
+            let line = binary.span().start().line;
             let is_sub_assign = matches!(binary.op, syn::BinOp::SubAssign(_));
             let is_add_assign = matches!(binary.op, syn::BinOp::AddAssign(_));
             let is_sub = matches!(binary.op, syn::BinOp::Sub(_));
@@ -757,6 +869,12 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
                 let op_form = if is_sub_assign || is_add_assign { "=" } else { "" };
                 let is_assign = is_sub_assign || is_add_assign;
 
+                if !is_security_relevant_arithmetic(&lhs_str, &rhs_str, is_assign) {
+                    find_unsafe_ops_in_expr(&binary.left, fn_name, file, findings);
+                    find_unsafe_ops_in_expr(&binary.right, fn_name, file, findings);
+                    return;
+                }
+
                 findings.push(Finding {
                     id: String::new(),
                     title: format!("Unsafe Arithmetic: `{op_str}{op_form}` in `{fn_name}` — use checked_*() instead",),
@@ -767,7 +885,7 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
                          on overflow instead of panicking. Use `checked_sub()`, \
                          `checked_add()`, or `overflow-checks = true` instead.",
                     ),
-                    location: Some(format!("{file}:0")),
+                    location: Some(format!("{file}:{line}")),
                     suggestion: Some(if is_assign {
                         "Replace with `.checked_sub(amount).ok_or(Error::Underflow)?` or \
                              `.checked_add(amount).ok_or(Error::Overflow)?`."
@@ -778,7 +896,11 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
                 });
             }
 
-            if (is_mul || is_mul_assign) && !lhs_str.is_empty() && !rhs_str.is_empty() {
+            if (is_mul || is_mul_assign)
+                && !lhs_str.is_empty()
+                && !rhs_str.is_empty()
+                && is_security_relevant_arithmetic(&lhs_str, &rhs_str, is_mul_assign)
+            {
                 findings.push(Finding {
                     id: String::new(),
                     title: format!("Unsafe Multiplication: possible overflow in `{}`", fn_name),
@@ -788,7 +910,7 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
                          Use `checked_mul()` and chain with `checked_div()`.",
                         lhs_str, fn_name
                     ),
-                    location: Some(format!("{}:{}", file, 0)),
+                    location: Some(format!("{file}:{line}")),
                     suggestion: Some(
                         "Use `.checked_mul(other)?.checked_div(10000)?` for fee calculations, \
                          or upcast to u128 for intermediate results."
@@ -796,6 +918,9 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
                     ),
                 });
             }
+
+            find_unsafe_ops_in_expr(&binary.left, fn_name, file, findings);
+            find_unsafe_ops_in_expr(&binary.right, fn_name, file, findings);
         }
         syn::Expr::If(if_expr) => {
             find_unsafe_ops_in_expr(&if_expr.cond, fn_name, file, findings);
@@ -830,6 +955,30 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
     }
 }
 
+fn is_security_relevant_arithmetic(lhs: &str, rhs: &str, is_assign: bool) -> bool {
+    let joined = format!("{} {}", lhs.to_lowercase(), rhs.to_lowercase());
+    let keywords = [
+        "amount",
+        "balance",
+        "deposit",
+        "withdraw",
+        "supply",
+        "total",
+        "vault",
+        "fee",
+        "reward",
+        "share",
+        "price",
+        "lamport",
+        "debt",
+        "collateral",
+        "liquidity",
+        "reserve",
+    ];
+
+    (is_assign && lhs.contains('.')) || keywords.iter().any(|keyword| joined.contains(keyword))
+}
+
 fn expr_to_string_v2(expr: &syn::Expr) -> String {
     match expr {
         syn::Expr::Path(expr_path) => {
@@ -861,7 +1010,7 @@ fn expr_to_string_v2(expr: &syn::Expr) -> String {
     }
 }
 
-pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<()> {
+pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&str>) -> Result<()> {
     ui::print_banner();
 
     if format != "text" && format != "sarif" {
@@ -886,6 +1035,7 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
     let mut all_accounts = Vec::new();
     let mut all_instructions = Vec::new();
     let mut parsed_files: Vec<(syn::File, String)> = Vec::new();
+    let mut storage_fields: StorageFieldMap = HashMap::new();
     let mut file_count = 0;
 
     for file_path in &source_files {
@@ -901,6 +1051,7 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
         file_count += 1;
         all_accounts.extend(extract_accounts_structs(&parsed, file_path));
         all_instructions.extend(extract_instruction_names(&parsed, file_path));
+        storage_fields.extend(extract_account_storage_fields(&parsed));
         parsed_files.push((parsed, path_str));
     }
 
@@ -913,7 +1064,7 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
     all_findings.extend(check_missing_owner(&all_accounts));
     all_findings.extend(check_missing_mut(&all_accounts, idl.as_ref()));
     all_findings.extend(check_discriminator_collisions(&all_instructions));
-    all_findings.extend(check_missing_has_one(&all_accounts));
+    all_findings.extend(check_missing_has_one(&all_accounts, &storage_fields));
     all_findings.extend(check_reinit_risk(&all_accounts, &all_instructions));
     all_findings.extend(check_unsafe_arithmetic(&parsed_files));
     all_findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_name_strings));
@@ -924,6 +1075,8 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
     if let Some(report_path) = tx_report {
         all_findings.extend(tx_report::check_tx_report_correlation(&all_accounts, report_path));
     }
+
+    dedupe_findings(&mut all_findings);
 
     for (i, f) in all_findings.iter_mut().enumerate() {
         f.id = format!("SAT-{:03}", i + 1);
@@ -938,12 +1091,24 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
         return Ok(());
     }
 
-    render::render_accounts_summary(&ctx);
-    render::render_instructions_summary(&ctx);
-    render::render_findings(&all_findings);
+    if triage {
+        render::render_triage_findings(&all_findings);
+    } else {
+        render::render_accounts_summary(&ctx);
+        render::render_instructions_summary(&ctx);
+        render::render_findings(&all_findings);
+    }
     render::render_summary(&all_findings);
 
     Ok(())
+}
+
+fn dedupe_findings(findings: &mut Vec<Finding>) {
+    let mut seen = HashSet::new();
+    findings.retain(|finding| {
+        let key = (finding.title.clone(), finding.location.clone().unwrap_or_default(), finding.description.clone());
+        seen.insert(key)
+    });
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -954,10 +1119,14 @@ pub fn analyze_string_for_test(source: &str) -> (Vec<AccountsStruct>, Vec<Source
     let path = PathBuf::from("test.rs");
     let accounts = extract_accounts_structs(&parsed, &path);
     let instructions = extract_instruction_names(&parsed, &path);
+    let storage_fields = extract_account_storage_fields(&parsed);
     let mut findings = Vec::new();
     findings.extend(check_missing_signer(&accounts));
     findings.extend(check_missing_owner(&accounts));
     findings.extend(check_discriminator_collisions(&instructions));
+    findings.extend(check_missing_has_one(&accounts, &storage_fields));
+    findings.extend(check_unsafe_arithmetic(&[(parsed.clone(), "test.rs".to_string())]));
+    dedupe_findings(&mut findings);
     for (i, f) in findings.iter_mut().enumerate() {
         f.id = format!("SAT-{:03}", i + 1);
     }

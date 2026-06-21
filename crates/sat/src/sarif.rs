@@ -96,6 +96,8 @@ const RULES: &[(&str, &str, &str)] = &[
     ("SAT009", "Sysvar Misuse", "Missing sysvar account declaration or writable sysvar."),
     ("SAT010", "Serialization Mismatch", "Field type mismatch between storage and instruction args."),
     ("SAT011", "Tx-Report Mismatch", "Runtime transaction data differs from declared constraints."),
+    ("SAT012", "Unsafe Arithmetic", "Arithmetic on security-sensitive values lacks checked operations."),
+    ("SAT013", "Token-2022 Risk", "Token-2022 usage requires extension-specific accounting checks."),
 ];
 
 pub fn export_sarif(findings: &[Finding], _program_name: &str, output_path: &str) -> Result<()> {
@@ -128,7 +130,15 @@ pub fn export_sarif(findings: &[Finding], _program_name: &str, output_path: &str
             rule_id,
             rule_index,
             level: severity_to_sarif_level(finding.severity),
-            message: SarifMessage { text: format!("{}: {}", finding.title, finding.description) },
+            message: SarifMessage {
+                text: format!(
+                    "{}: {} Confidence: {}. Manual verification: {}",
+                    finding.title,
+                    finding.description,
+                    finding.confidence(),
+                    finding.manual_verification_steps().join(" ")
+                ),
+            },
             locations: vec![SarifLocation {
                 physical_location: SarifPhysicalLocation {
                     artifact_location: SarifArtifactLocation { uri },
@@ -184,6 +194,14 @@ fn classify_finding_rule(finding: &Finding) -> String {
         "SAT010".to_string()
     } else if finding.title.contains("Tx-Report") || finding.title.contains("Transaction") {
         "SAT011".to_string()
+    } else if finding.title.contains("Unsafe Arithmetic") || finding.title.contains("Unsafe Multiplication") {
+        "SAT012".to_string()
+    } else if finding.title.contains("Token-2022")
+        || finding.title.contains("Transfer Fee")
+        || finding.title.contains("Permanent Delegate")
+        || finding.title.contains("Interest-Bearing")
+    {
+        "SAT013".to_string()
     } else {
         "SAT001".to_string()
     }

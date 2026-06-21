@@ -26,7 +26,7 @@ Parses an Anchor IDL JSON to build a state-machine model of the contract.
 - Builds a directed state transition graph
 - Detects: **reinitialization attacks**, **state lockouts**, **missing access control**, **discriminator collisions**, **missing initializers**
 
-### `sat analyze src [PATH] [--format text|sarif] [--tx-report PATH]`
+### `sat analyze src [PATH] [--format text|sarif] [--triage] [--tx-report PATH]`
 
 Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` structures.
 
@@ -52,18 +52,29 @@ Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` 
 
 **CI:** `--format sarif` exports to `sat-results.sarif` for GitHub Code Scanning.
 
+**Bug bounty triage:** `--triage` suppresses the structural summaries and prints a prioritized queue with confidence, affected accounts, and the first manual verification step.
+
 ### `sat fuzz init` / `sat fuzz run`
 
-Generates a complete `fuzzer/` sub-crate from the Anchor IDL:
+Generates a `fuzzer/` sub-crate from the Anchor IDL:
 
 - `FuzzInstruction` enum with `#[derive(Arbitrary)]` — one variant per instruction
-- Auto-generated security invariants: token supply preservation, vault balance consistency, no negative balances, authority immutability, state integrity
+- Anchor instruction discriminators prepended to generated instruction data
+- IDL-derived account metas, deterministic placeholder accounts, and before/after account snapshots
+- Baseline security invariants: account drain detection, authority immutability, state integrity
+- Extension hooks for token supply preservation and vault balance consistency once program-specific account factories are filled in
 - `libfuzzer-sys` harness with `solana-program-test` + `BanksClient`
 - `sat fuzz run` builds and executes with `cargo fuzz` (60s timeout)
+
+The generated fuzzer is intentionally honest: it is useful scaffolding immediately, but meaningful deep execution still requires replacing placeholder account data with target-specific account layouts.
 
 ### `sat report new`
 
 Interactive CLI to create structured markdown audit findings with YAML front-matter. Auto-increments `SAT-XXX` IDs from existing files in `audit-findings/`. Outputs slugified filenames (e.g. `SAT-001-missing-signer-check.md`).
+
+## Bug Bounty Workflow
+
+See `docs/BUG_BOUNTY_WORKFLOW.md` for the recommended loop: triage, manual verification, PoC construction, false-positive control, and fuzzer follow-up.
 
 ## Shipped Audit Findings
 

@@ -400,6 +400,98 @@ fn test_fixture_sysvar_issues_parses() {
 }
 
 #[test]
+fn test_missing_has_one_requires_storage_authority_field() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn update(ctx: Context<Update>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(mut)]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct State {
+    pub authority: Pubkey,
+    pub value: u64,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let has_one_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing `has_one`")).collect();
+
+    assert_eq!(has_one_findings.len(), 1, "should flag missing has_one when storage has authority");
+}
+
+#[test]
+fn test_arithmetic_detector_skips_plain_loop_counters() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn count(ctx: Context<Count>) -> Result<()> {
+        let mut i = 0u64;
+        i += 1;
+        let j = i + 2;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Count<'info> {
+    pub authority: Signer<'info>,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let arithmetic_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Unsafe Arithmetic")).collect();
+
+    assert!(arithmetic_findings.is_empty(), "plain counters should not be reported as bounty-relevant arithmetic");
+}
+
+#[test]
+fn test_arithmetic_detector_flags_account_balance_updates() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        ctx.accounts.state.balance -= amount;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(mut)]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct State {
+    pub authority: Pubkey,
+    pub balance: u64,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let arithmetic_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Unsafe Arithmetic")).collect();
+
+    assert!(!arithmetic_findings.is_empty(), "account balance arithmetic should be reported");
+}
+
+#[test]
 fn test_all_fixture_files_parse() {
     use std::fs;
     let dirs = ["tests/fixtures_ast/vulnerable", "tests/fixtures_ast/clean"];

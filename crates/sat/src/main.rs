@@ -65,6 +65,9 @@ enum AnalyzeTarget {
         /// Output format: text or sarif
         #[arg(long, default_value = "text")]
         format: String,
+        /// Show only prioritized findings with first manual verification step
+        #[arg(long)]
+        triage: bool,
         /// Path to transaction analysis report JSON for cross-tool correlation
         #[arg(long)]
         tx_report: Option<String>,
@@ -91,8 +94,8 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Analyze { target } => match target {
             AnalyzeTarget::Idl { path } => idl::run(path.as_deref()),
-            AnalyzeTarget::Src { path, format, tx_report } => {
-                analyzer::run(path.as_deref(), &format, tx_report.as_deref())
+            AnalyzeTarget::Src { path, format, triage, tx_report } => {
+                analyzer::run(path.as_deref(), &format, triage, tx_report.as_deref())
             }
         },
         Commands::Fuzz { action } => match action {

@@ -1,5 +1,5 @@
 use crate::analyzer::AnalysisContext;
-use crate::types::{Finding, Severity};
+use crate::types::{Confidence, Finding, Severity};
 use crate::ui;
 use colored::Colorize;
 use sha2::{Digest, Sha256};
@@ -116,6 +116,12 @@ pub(crate) fn render_findings(all_findings: &[Finding]) {
                 if let Some(ref location) = finding.location {
                     println!("  at {location}");
                 }
+                println!("  confidence: {}", finding.confidence());
+
+                let affected_accounts = finding.affected_accounts();
+                if !affected_accounts.is_empty() {
+                    println!("  affected: {}", affected_accounts.join(", "));
+                }
                 println!();
                 println!("  {}", finding.description);
 
@@ -124,9 +130,60 @@ pub(crate) fn render_findings(all_findings: &[Finding]) {
                     println!("  {}", "Suggestion:".green().bold());
                     println!("  {suggestion}");
                 }
+
+                let verification_steps = finding.manual_verification_steps();
+                if !verification_steps.is_empty() {
+                    println!();
+                    println!("  {}", "Manual verification:".cyan().bold());
+                    for step in verification_steps {
+                        println!("  - {step}");
+                    }
+                }
                 println!();
             }
         }
+    }
+}
+
+pub(crate) fn render_triage_findings(all_findings: &[Finding]) {
+    ui::print_section_header("Triage Queue");
+
+    let actionable: Vec<&Finding> = all_findings
+        .iter()
+        .filter(|finding| {
+            matches!(finding.severity, Severity::Critical | Severity::High)
+                || (finding.severity == Severity::Medium && finding.confidence() != Confidence::Low)
+        })
+        .collect();
+
+    if actionable.is_empty() {
+        ui::print_success("No high-priority triage items found.");
+        println!();
+        return;
+    }
+
+    for (index, finding) in actionable.iter().enumerate() {
+        println!(
+            "{} {} {} ({})",
+            format!("#{}", index + 1).dimmed(),
+            ui::severity_tag(finding.severity),
+            finding.title.bold(),
+            finding.confidence()
+        );
+
+        if let Some(location) = &finding.location {
+            println!("  at {location}");
+        }
+
+        let accounts = finding.affected_accounts();
+        if !accounts.is_empty() {
+            println!("  affected: {}", accounts.join(", "));
+        }
+
+        if let Some(step) = finding.manual_verification_steps().first() {
+            println!("  first check: {step}");
+        }
+        println!();
     }
 }
 

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use serde_json;
 use std::fs;
 
 use sat::idl::IdlJson;
