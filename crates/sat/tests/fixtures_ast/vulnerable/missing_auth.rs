@@ -33,6 +33,7 @@ pub struct Initialize<'info> {
 #[derive(Accounts)]
 pub struct UpdateValue<'info> {
     pub state: Account<'info, State>,
+    #[account(mut)]
     pub authority: AccountInfo<'info>,
 }
 
@@ -40,6 +41,7 @@ pub struct UpdateValue<'info> {
 pub struct CloseState<'info> {
     #[account(mut)]
     pub state: Account<'info, State>,
+    #[account(mut)]
     pub closer: AccountInfo<'info>,
 }
 

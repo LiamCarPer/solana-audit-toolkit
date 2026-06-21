@@ -34,6 +34,7 @@ pub struct AccountField {
     pub has_init: bool,
     pub has_owner: bool,
     pub has_seeds: bool,
+    pub has_one_values: Vec<String>,
     pub owner_value: Option<String>,
     pub is_account_info: bool,
     pub is_unchecked_account: bool,
@@ -127,6 +128,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                 let mut has_init = false;
                 let mut has_owner = false;
                 let mut has_seeds = false;
+                let mut has_one_values = Vec::new();
                 let mut owner_value = None;
 
                 for attr in &field.attrs {
@@ -141,6 +143,9 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                         if let Some(val) = parsed.key_values.get("owner") {
                             has_owner = true;
                             owner_value = Some(val.clone());
+                        }
+                        if let Some(val) = parsed.key_values.get("has_one") {
+                            has_one_values.push(val.clone());
                         }
                     }
                 }
@@ -158,6 +163,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                     has_init,
                     has_owner,
                     has_seeds,
+                    has_one_values,
                     owner_value,
                     is_account_info,
                     is_unchecked_account,
@@ -379,6 +385,13 @@ fn check_missing_owner(accounts: &[AccountsStruct]) -> Vec<Finding> {
                 continue;
             }
 
+            // FP filter: skip non-mut AccountInfo/UncheckedAccount fields — these are
+            // often read-only references (mint addresses, treasury, etc.) where the
+            // program's logic or seeds constraint provides adequate security.
+            if !field.has_mut {
+                continue;
+            }
+
             if !field.has_owner {
                 findings.push(Finding {
                     id: String::new(),
@@ -533,7 +546,320 @@ fn check_discriminator_collisions(instructions: &[SourceInstruction]) -> Vec<Fin
     findings
 }
 
-// ── Main entry point ──────────────────────────────────────────────────────────
+fn check_missing_has_one(accounts: &[AccountsStruct]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    let authority_signer_names: HashSet<&str> =
+        ["authority", "admin", "owner", "creator", "manager", "operator", "governor"].iter().copied().collect();
+
+    for accts in accounts {
+        // Collect all Account<T> fields that have `mut` and store has_one values
+        let typed_mut_fields: Vec<&AccountField> = accts
+            .fields
+            .iter()
+            .filter(|f| {
+                !f.is_account_info
+                    && !f.is_unchecked_account
+                    && !f.is_signer_type
+                    && f.ty_name.starts_with("Account<")
+                    && f.has_mut
+            })
+            .collect();
+
+        if typed_mut_fields.is_empty() {
+            continue;
+        }
+
+        // Find Signer fields that look like authorities
+        let authority_signers: Vec<&AccountField> = accts
+            .fields
+            .iter()
+            .filter(|f| {
+                (f.is_signer_type || f.has_signer)
+                    && (authority_signer_names.contains(f.name.to_lowercase().as_str())
+                        || f.name.to_lowercase().ends_with("_authority")
+                        || f.name.to_lowercase().ends_with("_admin")
+                        || f.name.to_lowercase().ends_with("_owner"))
+            })
+            .collect();
+
+        for signer in &authority_signers {
+            // Check if ANY Account<T> field has `has_one` referencing this signer
+            let has_link = typed_mut_fields
+                .iter()
+                .any(|f| f.has_one_values.iter().any(|v| v.to_lowercase() == signer.name.to_lowercase()));
+
+            if !has_link {
+                // Find which Account<T> field likely stores this authority
+                let likely_field = typed_mut_fields.first();
+
+                findings.push(Finding {
+                    id: String::new(),
+                    title: format!(
+                        "Missing `has_one` Constraint: signer `{}` in `{}` is not linked to any Account field",
+                        signer.name, accts.name
+                    ),
+                    severity: Severity::High,
+                    description: format!(
+                        "The `Signer<'info>` field `{}` in `{}` appears to be an authority (based on its name), \
+                         but no `Account<'info, T>` field in this struct has `has_one = {}` to verify that the \
+                         stored authority matches the signer. A program that accepts a signer without linking \
+                         it to the stored authority via `has_one` cannot guarantee that the caller owns the \
+                         account they are modifying. This enables privilege escalation and account substitution attacks.",
+                        signer.name, accts.name, signer.name
+                    ),
+                    location: Some(format!("{}:{} ({}::{})", accts.file.display(), signer.line, accts.name, signer.name)),
+                    suggestion: Some(format!(
+                        "Add `#[account(mut, has_one = {})]` to the Account field that stores the authority \
+                         pubkey (likely `{}`). Or add `#[account(signer)]` if the field is meant to be a \
+                         standalone signer without a stored authority.",
+                        signer.name,
+                        likely_field.map(|f| f.name.as_str()).unwrap_or("<account-field>")
+                    )),
+                });
+            }
+        }
+    }
+
+    findings
+}
+
+fn check_reinit_risk(accounts: &[AccountsStruct], instructions: &[SourceInstruction]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    let init_instructions: Vec<&str> = instructions
+        .iter()
+        .filter(|ix| {
+            let name = ix.name.to_lowercase();
+            name.starts_with("initialize") || name.starts_with("init_") || name.starts_with("create_")
+        })
+        .map(|ix| ix.name.as_str())
+        .collect();
+
+    if init_instructions.is_empty() {
+        return findings;
+    }
+
+    for accts in accounts {
+        let accts_lower = accts.name.to_lowercase();
+        let is_init_struct = accts_lower.contains("init") || accts_lower.contains("create");
+
+        if !is_init_struct {
+            continue;
+        }
+
+        for field in &accts.fields {
+            if field.has_mut && !field.has_init && !field.has_signer && !field.is_signer_type {
+                let accts_stripped = accts_lower.replace('_', "");
+                let instruction_matches = init_instructions
+                    .iter()
+                    .any(|ix_name| accts_stripped.contains(&ix_name.to_lowercase().replace('_', "")));
+
+                if !instruction_matches {
+                    continue;
+                }
+
+                findings.push(Finding {
+                    id: String::new(),
+                    title: format!(
+                        "Reinitialization Risk: `{}::{}` uses `mut` instead of `init`",
+                        accts.name, field.name
+                    ),
+                    severity: Severity::High,
+                    description: format!(
+                        "The field `{}` in `{}` is marked with `#[account(mut)]` but NOT `#[account(init)]`, \
+                         even though this accounts struct appears to be used for initialization. Without \
+                         Anchor's `init` constraint, the program does not check whether the account \
+                         already exists. An attacker can call the initialization instruction multiple \
+                         times, overwriting existing account data and resetting state (e.g., changing \
+                         the admin to their own pubkey). This is the vulnerability class behind the \
+                         Cashio $50M hack.",
+                        field.name, accts.name
+                    ),
+                    location: Some(format!("{}:{} ({}::{})", accts.file.display(), field.line, accts.name, field.name)),
+                    suggestion: Some(format!(
+                        "Change `#[account(mut)]` to `#[account(init, payer = {}, space = 8 + ...)]` on \
+                         the `{}` field, or add an explicit `is_initialized` check before any state writes.",
+                        accts
+                            .fields
+                            .iter()
+                            .find(|f| f.is_signer_type || f.has_signer)
+                            .map(|f| f.name.as_str())
+                            .unwrap_or("<signer>"),
+                        field.name
+                    )),
+                });
+            }
+        }
+    }
+
+    findings
+}
+
+fn check_unsafe_arithmetic(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    for (file, path_str) in parsed_files {
+        for item in &file.items {
+            if let syn::Item::Mod(item_mod) = item {
+                if !item_mod.attrs.iter().any(|a| a.path().is_ident("program")) {
+                    continue;
+                }
+                if let Some((_, items)) = &item_mod.content {
+                    for mod_item in items {
+                        if let syn::Item::Fn(func) = mod_item
+                            && matches!(func.vis, syn::Visibility::Public(_))
+                        {
+                            let fn_name = func.sig.ident.to_string();
+                            let body = &func.block;
+                            find_unsafe_ops_in_block(body, &fn_name, path_str, &mut findings);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+fn find_unsafe_ops_in_block(block: &syn::Block, fn_name: &str, file: &str, findings: &mut Vec<Finding>) {
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Expr(expr, _) => {
+                find_unsafe_ops_in_expr(expr, fn_name, file, findings);
+            }
+            syn::Stmt::Local(local) => {
+                if let Some(init) = &local.init {
+                    find_unsafe_ops_in_expr(&init.expr, fn_name, file, findings);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings: &mut Vec<Finding>) {
+    match expr {
+        syn::Expr::Binary(binary) => {
+            let is_sub_assign = matches!(binary.op, syn::BinOp::SubAssign(_));
+            let is_add_assign = matches!(binary.op, syn::BinOp::AddAssign(_));
+            let is_sub = matches!(binary.op, syn::BinOp::Sub(_));
+            let is_add = matches!(binary.op, syn::BinOp::Add(_));
+            let is_mul = matches!(binary.op, syn::BinOp::Mul(_));
+            let is_mul_assign = matches!(binary.op, syn::BinOp::MulAssign(_));
+
+            let lhs_str = expr_to_string_v2(&binary.left);
+            let rhs_str = expr_to_string_v2(&binary.right);
+
+            if is_sub_assign || is_add_assign || is_sub || is_add {
+                let op_str = if is_sub_assign || is_sub { "-" } else { "+" };
+                let op_form = if is_sub_assign || is_add_assign { "=" } else { "" };
+                let is_assign = is_sub_assign || is_add_assign;
+
+                findings.push(Finding {
+                    id: String::new(),
+                    title: format!("Unsafe Arithmetic: `{op_str}{op_form}` in `{fn_name}` — use checked_*() instead",),
+                    severity: Severity::High,
+                    description: format!(
+                        "The expression `{lhs_str}` uses `{op_str}{op_form}` on a field in `{fn_name}`. \
+                         In release mode (optimized builds), Rust arithmetic wraps \
+                         on overflow instead of panicking. Use `checked_sub()`, \
+                         `checked_add()`, or `overflow-checks = true` instead.",
+                    ),
+                    location: Some(format!("{file}:0")),
+                    suggestion: Some(if is_assign {
+                        "Replace with `.checked_sub(amount).ok_or(Error::Underflow)?` or \
+                             `.checked_add(amount).ok_or(Error::Overflow)?`."
+                            .to_string()
+                    } else {
+                        "Use `checked_sub()` or `checked_add()` instead of the raw operator.".to_string()
+                    }),
+                });
+            }
+
+            if (is_mul || is_mul_assign) && !lhs_str.is_empty() && !rhs_str.is_empty() {
+                findings.push(Finding {
+                    id: String::new(),
+                    title: format!("Unsafe Multiplication: possible overflow in `{}`", fn_name),
+                    severity: Severity::Medium,
+                    description: format!(
+                        "The expression `{}` in `{}` may overflow if both operands are large. \
+                         Use `checked_mul()` and chain with `checked_div()`.",
+                        lhs_str, fn_name
+                    ),
+                    location: Some(format!("{}:{}", file, 0)),
+                    suggestion: Some(
+                        "Use `.checked_mul(other)?.checked_div(10000)?` for fee calculations, \
+                         or upcast to u128 for intermediate results."
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+        syn::Expr::If(if_expr) => {
+            find_unsafe_ops_in_expr(&if_expr.cond, fn_name, file, findings);
+            find_unsafe_ops_in_block(&if_expr.then_branch, fn_name, file, findings);
+            if let Some((_, else_expr)) = &if_expr.else_branch {
+                find_unsafe_ops_in_expr(else_expr, fn_name, file, findings);
+            }
+        }
+        syn::Expr::Block(block_expr) => {
+            find_unsafe_ops_in_block(&block_expr.block, fn_name, file, findings);
+        }
+        syn::Expr::ForLoop(for_loop) => {
+            find_unsafe_ops_in_block(&for_loop.body, fn_name, file, findings);
+        }
+        syn::Expr::While(while_loop) => {
+            find_unsafe_ops_in_block(&while_loop.body, fn_name, file, findings);
+        }
+        syn::Expr::Match(match_expr) => {
+            for arm in &match_expr.arms {
+                if let Some((_, guard_expr)) = &arm.guard {
+                    find_unsafe_ops_in_expr(guard_expr, fn_name, file, findings);
+                }
+                find_unsafe_ops_in_expr(&arm.body, fn_name, file, findings);
+            }
+        }
+        syn::Expr::Call(call) => {
+            for arg in &call.args {
+                find_unsafe_ops_in_expr(arg, fn_name, file, findings);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn expr_to_string_v2(expr: &syn::Expr) -> String {
+    match expr {
+        syn::Expr::Path(expr_path) => {
+            expr_path.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::")
+        }
+        syn::Expr::Field(field) => {
+            let base = expr_to_string_v2(&field.base);
+            let member = match &field.member {
+                syn::Member::Named(ident) => ident.to_string(),
+                syn::Member::Unnamed(index) => index.index.to_string(),
+            };
+            format!("{}.{}", base, member)
+        }
+        syn::Expr::Lit(lit) => lit_to_string(&lit.lit),
+        syn::Expr::Paren(paren) => format!("({})", expr_to_string_v2(&paren.expr)),
+        syn::Expr::Binary(binary) => {
+            format!("{} {:?} {}", expr_to_string_v2(&binary.left), binary.op, expr_to_string_v2(&binary.right))
+        }
+        syn::Expr::Unary(unary) => {
+            format!("{:?}{}", unary.op, expr_to_string_v2(&unary.expr))
+        }
+        syn::Expr::MethodCall(method) => {
+            format!("{}.{}()", expr_to_string_v2(&method.receiver), method.method)
+        }
+        syn::Expr::Cast(cast) => {
+            format!("{} as {}", expr_to_string_v2(&cast.expr), type_to_string(&cast.ty))
+        }
+        _ => format!("{expr:?}"),
+    }
+}
 
 pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<()> {
     ui::print_banner();
@@ -587,6 +913,9 @@ pub fn run(path: Option<&str>, format: &str, tx_report: Option<&str>) -> Result<
     all_findings.extend(check_missing_owner(&all_accounts));
     all_findings.extend(check_missing_mut(&all_accounts, idl.as_ref()));
     all_findings.extend(check_discriminator_collisions(&all_instructions));
+    all_findings.extend(check_missing_has_one(&all_accounts));
+    all_findings.extend(check_reinit_risk(&all_accounts, &all_instructions));
+    all_findings.extend(check_unsafe_arithmetic(&parsed_files));
     all_findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_name_strings));
     all_findings.extend(sysvar::check_sysvar_misuse(&parsed_files, &all_accounts));
     all_findings.extend(serialization::check_serialization_mismatch(&parsed_files));

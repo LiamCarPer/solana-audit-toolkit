@@ -11,6 +11,7 @@ pub mod test_unchecked {
 
 #[derive(Accounts)]
 pub struct ProcessUnchecked<'info> {
+    #[account(mut)]
     pub raw_account: AccountInfo<'info>,
     #[account(signer)]
     pub user: Signer<'info>,
@@ -18,5 +19,6 @@ pub struct ProcessUnchecked<'info> {
 
 #[derive(Accounts)]
 pub struct ProcessUnsafe<'info> {
+    #[account(mut)]
     pub raw_account: UncheckedAccount<'info>,
 }

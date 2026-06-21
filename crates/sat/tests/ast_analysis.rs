@@ -62,6 +62,7 @@ fn test_missing_owner_on_account_info() {
     let source = r#"
 #[derive(Accounts)]
 pub struct ReadState<'info> {
+    #[account(mut)]
     pub some_account: AccountInfo<'info>,
 }
 "#;
@@ -80,6 +81,7 @@ fn test_missing_owner_on_unchecked_account() {
     let source = r#"
 #[derive(Accounts)]
 pub struct ProcessUnsafe<'info> {
+    #[account(mut)]
     pub raw: UncheckedAccount<'info>,
 }
 "#;
@@ -261,17 +263,20 @@ fn test_multiple_accounts_structs_in_file() {
 pub struct Transfer<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+    #[account(mut)]
     pub recipient: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
 pub struct Close<'info> {
+    #[account(mut)]
     pub admin: AccountInfo<'info>,
 }
 "#;
     let (accounts, _, findings) = analyzer::analyze_string_for_test(source);
     assert_eq!(accounts.len(), 2);
-    assert!(findings.len() >= 2, "should flag both missing signer (admin) and missing owner (recipient)");
+    let owner_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Owner")).collect();
+    assert!(owner_findings.len() >= 2, "should flag missing owner on recipient and admin");
 }
 
 #[test]
