@@ -1,14 +1,11 @@
 # Solana Audit Toolkit (`sat`)
 
-A command-line utility and framework for security researchers, smart contract auditors, and developers to identify vulnerabilities, perform advanced verification, and document findings in Anchor-based Solana programs.
+A static analysis and fuzzing toolkit for Anchor-based Solana programs. Parses IDL and Rust source via `syn` to find missing signer constraints, reinitialization vectors, overflow-prone arithmetic, CPI depth violations, Token-2022 extension risks, and more — before the program hits mainnet.
 
-## Features
-
-- **IDL State Transition Analysis** — Build programmatic state-machine models from Anchor IDLs to detect reinitialization attacks, state lockouts, and access control gaps.
-- **AST-Based Static Analysis** — Parse Rust source with `syn` to find missing signer/owner constraints, CPI depth overflows, discriminator collisions, sysvar misuse, and serialization mismatches.
-- **ProgramTest Fuzzing Engine** — Generate and execute state-aware fuzzers with auto-generated security invariants.
-- **Token-2022 Analysis** — Detect and audit Token-2022 extensions for transfer fee bypass, permanent delegate abuse, and integration issues.
-- **Audit Findings Generator** — Interactive CLI to create structured markdown reports with YAML front-matter.
+```
+$ sat analyze src programs/vault/
+Summary: 4 findings: [CRIT] 1 CRITICAL | [HIGH] 2 HIGH | [MED] 1 MEDIUM
+```
 
 ## Installation
 
@@ -16,40 +13,105 @@ A command-line utility and framework for security researchers, smart contract au
 cargo install --path crates/sat
 ```
 
-## Usage
+Requires Rust 1.85+ (edition 2024).
+
+## Commands
+
+### `sat analyze idl [PATH]`
+
+Parses an Anchor IDL JSON to build a state-machine model of the contract.
+
+- Identifies state structs and their fields (init flags, authority keys, status enums)
+- Classifies every instruction as Initializer, Mutator, or Terminator
+- Builds a directed state transition graph
+- Detects: **reinitialization attacks**, **state lockouts**, **missing access control**, **discriminator collisions**, **missing initializers**
+
+### `sat analyze src [PATH] [--format text|sarif] [--tx-report PATH]`
+
+Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` structures.
+
+**Core checks:**
+- **Missing signer** — authority-named fields without `#[account(signer)]` or `Signer<'info>`
+- **Missing owner** — `AccountInfo` / `UncheckedAccount` without `#[account(owner = ...)]`
+- **Missing `mut`** — accounts written to per IDL but not marked `#[account(mut)]`
+- **Missing `has_one`** — Signer authorities not linked to their stored pubkey via `#[account(has_one = ...)]`
+- **Reinitialization risk** — `#[account(mut)]` used where `#[account(init)]` is expected
+- **Unsafe arithmetic** — `-=`, `+=`, `*` operators on account fields that may silently wrap in release mode
+- **Discriminator collisions** — two instructions in the same program hashing to the same 8-byte prefix
+
+**Advanced checks:**
+- **CPI depth tracking** — traces `invoke()` / `invoke_signed()` call chains, flags depths exceeding Solana's limit of 4
+- **Sysvar misuse** — instructions calling `Clock::get()`, `Rent::get()`, etc. without declaring the sysvar account, and sysvars incorrectly marked writable
+- **Serialization mismatch** — field width differences between `#[account]` storage structs and instruction argument structs (e.g. `u32` in args, `u64` on-chain)
+
+**Token-2022:**
+- Detects usage via program ID, `Cargo.toml` dependency, and `InterfaceAccount<TokenAccount>` / `InterfaceAccount<Mint>` types
+- Audits for **transfer fee bypass**, **permanent delegate abuse**, **interest-bearing token integration** issues
+
+**Cross-tool:** `--tx-report <json>` ingests transaction analysis reports from [rust-security-toolkit](https://github.com/LiamCarPer/rust-security-toolkit) and flags runtime signer/writable mismatches against declared constraints.
+
+**CI:** `--format sarif` exports to `sat-results.sarif` for GitHub Code Scanning.
+
+### `sat fuzz init` / `sat fuzz run`
+
+Generates a complete `fuzzer/` sub-crate from the Anchor IDL:
+
+- `FuzzInstruction` enum with `#[derive(Arbitrary)]` — one variant per instruction
+- Auto-generated security invariants: token supply preservation, vault balance consistency, no negative balances, authority immutability, state integrity
+- `libfuzzer-sys` harness with `solana-program-test` + `BanksClient`
+- `sat fuzz run` builds and executes with `cargo fuzz` (60s timeout)
+
+### `sat report new`
+
+Interactive CLI to create structured markdown audit findings with YAML front-matter. Auto-increments `SAT-XXX` IDs from existing files in `audit-findings/`. Outputs slugified filenames (e.g. `SAT-001-missing-signer-check.md`).
+
+## Shipped Audit Findings
+
+The `audit-findings/` directory contains three pre-written vulnerability analyses that demonstrate the toolkit's capabilities:
+
+| ID | Title |
+|----|-------|
+| SAT-001 | Missing Signer Check on Authority Account |
+| SAT-002 | PDA Seed Mismatch Enables Account Substitution |
+| SAT-003 | Reinitialization Attack via Missing Initialization Guard |
+
+Each includes YAML front-matter, exploit scenario, identification via `sat`, and remediation.
+
+## Self-Audit
+
+The toolkit runs against its own source in CI (`.github/workflows/sat-self-audit.yml`):
 
 ```bash
-# Analyze Anchor IDL for state transition vulnerabilities
-sat analyze idl [PATH_TO_IDL]
-
-# Run AST-based static analysis with SARIF output
-sat analyze src [PATH_TO_SRC] --format sarif
-
-# Cross-tool correlation with transaction analysis reports
-sat analyze src --tx-report path/to/report.json
-
-# Initialize a ProgramTest cargo-fuzz harness
-sat fuzz init
-
-# Run the state-machine fuzzer
-sat fuzz run
-
-# Create a new audit finding report
-sat report new
+sat analyze src crates/sat/src --format sarif
 ```
 
 ## Project Structure
 
 ```
-solana-audit-toolkit/
-├── crates/
-│   └── sat/               # Main CLI crate
-├── tests/
-│   └── fixtures/          # Test fixtures (vulnerable + clean Anchor programs)
-├── audit-findings/        # Pre-shipped audit finding writeups
-├── .github/workflows/     # CI pipelines
-├── Cargo.toml             # Workspace root
-└── PRD.md                 # Product Requirements Document
+├── crates/sat/src/
+│   ├── main.rs              CLI entry point (clap)
+│   ├── analyzer.rs           Core source parsing + analysis passes
+│   ├── render.rs             Terminal output rendering
+│   ├── sysvar.rs             Sysvar misuse detection
+│   ├── serialization.rs      Borsh/Anchor field width comparison
+│   ├── tx_report.rs          Cross-tool transaction correlation
+│   ├── cpi.rs                CPI depth tracking
+│   ├── idl.rs                IDL parsing + state transition analysis
+│   ├── token2022.rs          Token-2022 detection + auditing
+│   ├── reporter.rs           Interactive finding generator
+│   ├── fuzzer.rs             Fuzz harness generation
+│   ├── sarif.rs              SARIF 2.1.0 export
+│   ├── types.rs              Shared types (Finding, Severity)
+│   └── ui.rs                 Colored terminal helpers
+├── crates/sat/tests/
+│   ├── idl_analysis.rs       18 tests (IDL parsing, state model, findings)
+│   ├── ast_analysis.rs       21 tests (signer, owner, mut, seeds, SARIF)
+│   └── fixtures/             IDL JSON + Anchor Rust fixtures
+├── audit-findings/            Pre-shipped finding writeups
+├── .github/workflows/
+│   ├── test.yml               CI: fmt, clippy, build, test
+│   └── sat-self-audit.yml     Self-audit pipeline
+└── PRD.md                    Product Requirements Document
 ```
 
 ## License
