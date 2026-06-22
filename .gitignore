@@ -2,3 +2,4 @@
 **/*.rs.bk
 *.sarif
 rust_out
+.notes/
