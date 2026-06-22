@@ -35,6 +35,7 @@ pub struct AccountField {
     pub has_init: bool,
     pub has_owner: bool,
     pub has_seeds: bool,
+    pub has_close: bool,
     pub has_one_values: Vec<String>,
     pub owner_value: Option<String>,
     pub is_account_info: bool,
@@ -136,6 +137,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                 let mut has_init = false;
                 let mut has_owner = false;
                 let mut has_seeds = false;
+                let mut has_close = false;
                 let mut has_one_values = Vec::new();
                 let mut owner_value = None;
 
@@ -147,6 +149,9 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                         has_init = parsed.flags.contains("init");
                         if parsed.key_values.contains_key("seeds") {
                             has_seeds = true;
+                        }
+                        if parsed.key_values.contains_key("close") {
+                            has_close = true;
                         }
                         if let Some(val) = parsed.key_values.get("owner") {
                             has_owner = true;
@@ -171,6 +176,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                     has_init,
                     has_owner,
                     has_seeds,
+                    has_close,
                     has_one_values,
                     owner_value,
                     is_account_info,
@@ -1010,6 +1016,318 @@ fn expr_to_string_v2(expr: &syn::Expr) -> String {
     }
 }
 
+// ── CEI ordering analysis ─────────────────────────────────────────────────────
+
+fn check_cei_ordering(parsed_files: &[(syn::File, String)], accounts: &[AccountsStruct]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    for (file, path_str) in parsed_files {
+        for item in &file.items {
+            if let syn::Item::Mod(item_mod) = item {
+                if !item_mod.attrs.iter().any(|a| a.path().is_ident("program")) {
+                    continue;
+                }
+                if let Some((_, items)) = &item_mod.content {
+                    for mod_item in items {
+                        if let syn::Item::Fn(func) = mod_item
+                            && matches!(func.vis, syn::Visibility::Public(_))
+                        {
+                            let fn_name = func.sig.ident.to_string();
+                            let body = &func.block;
+                            detect_cei_violation(body, &fn_name, path_str, accounts, &mut findings);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+fn detect_cei_violation(
+    block: &syn::Block,
+    fn_name: &str,
+    file: &str,
+    _accounts: &[AccountsStruct],
+    findings: &mut Vec<Finding>,
+) {
+    let mut cpi_positions: Vec<usize> = Vec::new();
+
+    for (i, stmt) in block.stmts.iter().enumerate() {
+        if stmt_contains_cpi(stmt) {
+            cpi_positions.push(i);
+        }
+    }
+
+    if cpi_positions.is_empty() {
+        return;
+    }
+
+    let last_cpi = *cpi_positions.last().unwrap();
+
+    for (_i, stmt) in block.stmts.iter().enumerate().skip(last_cpi + 1) {
+        let writes = stmt_finds_account_writes(stmt);
+        if !writes.is_empty() {
+            let line = stmt_span_line(stmt).unwrap_or_default();
+            findings.push(Finding {
+                id: String::new(),
+                title: format!("CEI Violation: `{fn_name}` writes state after external call — reentrancy risk"),
+                severity: Severity::Critical,
+                description: format!(
+                    "The instruction `{fn_name}` writes to account state ({}) after calling an \
+                     external program via `invoke()` or `invoke_signed()`. This violates the \
+                     Checks-Effects-Interactions (CEI) pattern and enables reentrancy attacks. \
+                     The external program can re-enter this instruction during the CPI callback \
+                     and observe stale state, allowing double-spends or unauthorized withdrawals. \
+                     This is the vulnerability class behind the $320M Wormhole hack.",
+                    writes.join(", ")
+                ),
+                location: Some(format!("{file}:{line} ({fn_name})")),
+                suggestion: Some(
+                    "Move all state writes BEFORE any CPI/invoke() calls. Apply the pattern: \
+                     1. Checks (validate inputs), 2. Effects (update state), 3. Interactions (CPI). \
+                     If state must be updated after the CPI, use a reentrancy guard flag."
+                        .to_string(),
+                ),
+            });
+            return;
+        }
+    }
+}
+
+fn stmt_contains_cpi(stmt: &syn::Stmt) -> bool {
+    match stmt {
+        syn::Stmt::Expr(expr, _) => expr_contains_cpi(expr),
+        syn::Stmt::Local(local) => {
+            if let Some(init) = &local.init {
+                expr_contains_cpi(&init.expr)
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn expr_contains_cpi(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Call(call) => {
+            let callee = expr_to_string_v2(&call.func);
+            if callee == "invoke"
+                || callee == "invoke_signed"
+                || callee.ends_with("::invoke")
+                || callee.ends_with("::invoke_signed")
+            {
+                return true;
+            }
+            call.args.iter().any(expr_contains_cpi)
+        }
+        syn::Expr::MethodCall(mc) => {
+            if mc.method == "invoke" || mc.method == "invoke_signed" {
+                return true;
+            }
+            expr_contains_cpi(&mc.receiver)
+        }
+        syn::Expr::Block(be) => be.block.stmts.iter().any(stmt_contains_cpi),
+        syn::Expr::If(ei) => {
+            expr_contains_cpi(&ei.cond)
+                || ei.then_branch.stmts.iter().any(stmt_contains_cpi)
+                || ei.else_branch.as_ref().is_some_and(|(_, e)| expr_contains_cpi(e))
+        }
+        syn::Expr::Try(et) => expr_contains_cpi(&et.expr),
+        syn::Expr::Unary(unary) => expr_contains_cpi(&unary.expr),
+        syn::Expr::Match(em) => em.arms.iter().any(|arm| expr_contains_cpi(&arm.body)),
+        syn::Expr::Let(el) => expr_contains_cpi(&el.expr),
+        _ => false,
+    }
+}
+
+fn stmt_finds_account_writes(stmt: &syn::Stmt) -> Vec<String> {
+    let mut writes = Vec::new();
+    match stmt {
+        syn::Stmt::Expr(expr, _) => find_account_writes_in_expr(expr, &mut writes),
+        syn::Stmt::Local(local) => {
+            if let Some(init) = &local.init {
+                find_account_writes_in_expr(&init.expr, &mut writes);
+            }
+        }
+        _ => {}
+    }
+    writes
+}
+
+fn find_account_writes_in_expr(expr: &syn::Expr, writes: &mut Vec<String>) {
+    match expr {
+        syn::Expr::Binary(binary) => {
+            let lhs = expr_to_string_v2(&binary.left);
+            if lhs.contains("ctx.accounts.")
+                || lhs.contains(".balance")
+                || lhs.contains(".amount")
+                || lhs.contains(".data")
+            {
+                push_unique_str(writes, &lhs);
+            }
+            find_account_writes_in_expr(&binary.left, writes);
+            find_account_writes_in_expr(&binary.right, writes);
+        }
+        syn::Expr::Assign(assign) => {
+            let lhs = expr_to_string_v2(&assign.left);
+            if lhs.contains("ctx.accounts.")
+                || lhs.contains(".balance")
+                || lhs.contains(".amount")
+                || lhs.contains(".data")
+            {
+                push_unique_str(writes, &lhs);
+            }
+            find_account_writes_in_expr(&assign.left, writes);
+            find_account_writes_in_expr(&assign.right, writes);
+        }
+        syn::Expr::MethodCall(mc) => {
+            let receiver = expr_to_string_v2(&mc.receiver);
+            if receiver.contains("ctx.accounts.") {
+                push_unique_str(writes, &receiver);
+            }
+            find_account_writes_in_expr(&mc.receiver, writes);
+        }
+        _ => {}
+    }
+}
+
+fn stmt_span_line(stmt: &syn::Stmt) -> Option<usize> {
+    match stmt {
+        syn::Stmt::Expr(expr, _) => Some(expr.span().start().line),
+        syn::Stmt::Local(local) => Some(local.span().start().line),
+        _ => None,
+    }
+}
+
+fn push_unique_str(v: &mut Vec<String>, s: &str) {
+    let s = s.to_string();
+    if !v.contains(&s) {
+        v.push(s);
+    }
+}
+
+// ── Account closing detection ─────────────────────────────────────────────────
+
+fn check_account_closing(parsed_files: &[(syn::File, String)], accounts: &[AccountsStruct]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    let program_uses_close = accounts.iter().any(|accts| accts.fields.iter().any(|f| f.has_close));
+
+    for (_file, path_str) in parsed_files {
+        for item in &_file.items {
+            if let syn::Item::Mod(item_mod) = item {
+                if !item_mod.attrs.iter().any(|a| a.path().is_ident("program")) {
+                    continue;
+                }
+                if let Some((_, items)) = &item_mod.content {
+                    for mod_item in items {
+                        if let syn::Item::Fn(func) = mod_item
+                            && matches!(func.vis, syn::Visibility::Public(_))
+                        {
+                            let fn_name = func.sig.ident.to_string();
+                            let body = &func.block;
+
+                            if stmt_contains_lamports_manipulation(body) && !program_uses_close {
+                                let line = body.stmts.first().and_then(stmt_span_line).unwrap_or_default();
+                                findings.push(Finding {
+                                    id: String::new(),
+                                    title: format!(
+                                        "Unsafe Account Closing: `{fn_name}` manipulates lamports without `#[account(close = ...)]`"
+                                    ),
+                                    severity: Severity::High,
+                                    description: format!(
+                                        "The instruction `{fn_name}` manually manipulates account lamports \
+                                         (via `try_borrow_mut_lamports` or direct lamports assignment) but \
+                                         no `#[derive(Accounts)]` struct in this program uses Anchor's \
+                                         `#[account(close = ...)]` constraint. Manual lamports manipulation \
+                                         without Anchor's close constraint is vulnerable to account revival \
+                                         attacks (where a closed account is reinstantiated in the same \
+                                         transaction) and rent extraction attacks. Anchor's `close` \
+                                         constraint handles zeroing data, transferring lamports, and \
+                                         changing ownership to the System Program atomically.",
+                                    ),
+                                    location: Some(format!("{path_str}:{line} ({fn_name})")),
+                                    suggestion: Some(
+                                        "Use `#[account(mut, close = target)]` on the account you intend \
+                                         to close. Anchor will: 1) zero all account data, 2) transfer \
+                                         lamports to the target, 3) set the owner to System Program. \
+                                         Do not manually set lamports to zero."
+                                            .to_string(),
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+fn stmt_contains_lamports_manipulation(block: &syn::Block) -> bool {
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Expr(expr, _) => {
+                if expr_contains_lamports(expr) {
+                    return true;
+                }
+            }
+            syn::Stmt::Local(local) => {
+                if let Some(init) = &local.init
+                    && expr_contains_lamports(&init.expr)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn expr_contains_lamports(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::MethodCall(mc) => {
+            if mc.method == "try_borrow_mut_lamports" {
+                return true;
+            }
+            expr_contains_lamports(&mc.receiver)
+        }
+        syn::Expr::Field(field) => {
+            let field_name = match &field.member {
+                syn::Member::Named(ident) => ident.to_string(),
+                syn::Member::Unnamed(idx) => idx.index.to_string(),
+            };
+            if field_name == "lamports" {
+                return true;
+            }
+            expr_contains_lamports(&field.base)
+        }
+        syn::Expr::Assign(assign) => expr_contains_lamports(&assign.left) || expr_contains_lamports(&assign.right),
+        syn::Expr::Binary(binary) => expr_contains_lamports(&binary.left) || expr_contains_lamports(&binary.right),
+        syn::Expr::Block(be) => be.block.stmts.iter().any(|s| match s {
+            syn::Stmt::Expr(e, _) => expr_contains_lamports(e),
+            _ => false,
+        }),
+        syn::Expr::If(ei) => {
+            expr_contains_lamports(&ei.cond)
+                || ei.then_branch.stmts.iter().any(|s| match s {
+                    syn::Stmt::Expr(e, _) => expr_contains_lamports(e),
+                    _ => false,
+                })
+        }
+        syn::Expr::Try(et) => expr_contains_lamports(&et.expr),
+        syn::Expr::Unary(unary) => expr_contains_lamports(&unary.expr),
+        syn::Expr::Paren(paren) => expr_contains_lamports(&paren.expr),
+        _ => false,
+    }
+}
+
 pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&str>) -> Result<()> {
     ui::print_banner();
 
@@ -1067,6 +1385,8 @@ pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&st
     all_findings.extend(check_missing_has_one(&all_accounts, &storage_fields));
     all_findings.extend(check_reinit_risk(&all_accounts, &all_instructions));
     all_findings.extend(check_unsafe_arithmetic(&parsed_files));
+    all_findings.extend(check_cei_ordering(&parsed_files, &all_accounts));
+    all_findings.extend(check_account_closing(&parsed_files, &all_accounts));
     all_findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_name_strings));
     all_findings.extend(sysvar::check_sysvar_misuse(&parsed_files, &all_accounts));
     all_findings.extend(serialization::check_serialization_mismatch(&parsed_files));
@@ -1126,6 +1446,8 @@ pub fn analyze_string_for_test(source: &str) -> (Vec<AccountsStruct>, Vec<Source
     findings.extend(check_discriminator_collisions(&instructions));
     findings.extend(check_missing_has_one(&accounts, &storage_fields));
     findings.extend(check_unsafe_arithmetic(&[(parsed.clone(), "test.rs".to_string())]));
+    findings.extend(check_cei_ordering(&[(parsed.clone(), "test.rs".to_string())], &accounts));
+    findings.extend(check_account_closing(&[(parsed.clone(), "test.rs".to_string())], &accounts));
     dedupe_findings(&mut findings);
     for (i, f) in findings.iter_mut().enumerate() {
         f.id = format!("SAT-{:03}", i + 1);

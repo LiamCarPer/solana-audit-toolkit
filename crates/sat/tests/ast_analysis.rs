@@ -508,3 +508,180 @@ fn test_all_fixture_files_parse() {
         }
     }
 }
+
+#[test]
+fn test_cei_ordering_detects_write_after_cpi() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+
+        invoke(&instruction, &[ctx.accounts.vault.to_account_info()])?;
+
+        vault.balance -= amount;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+    pub external_program: AccountInfo<'info>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub balance: u64,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let cei_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("CEI Violation")).collect();
+    assert!(!cei_findings.is_empty(), "should detect CEI violation — write after invoke()");
+    assert!(
+        cei_findings[0].severity == sat::types::Severity::Critical
+            || cei_findings[0].severity == sat::types::Severity::High,
+        "CEI should be Critical or High"
+    );
+    assert!(cei_findings[0].description.contains("reentrancy"));
+}
+
+#[test]
+fn test_cei_ordering_skips_safe_write_before_cpi() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+        vault.balance = vault.balance.checked_sub(amount).unwrap();
+
+        invoke(&instruction, &[ctx.accounts.vault.to_account_info()])?;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+    pub external_program: AccountInfo<'info>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub balance: u64,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let cei_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("CEI Violation")).collect();
+    assert!(cei_findings.is_empty(), "should NOT flag when write happens BEFORE CPI (safe)");
+}
+
+#[test]
+fn test_cei_ordering_no_cpi_no_flags() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn update(ctx: Context<Update>, value: u64) -> Result<()> {
+        ctx.accounts.state.value = value;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(mut)]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct State {
+    pub authority: Pubkey,
+    pub value: u64,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let cei_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("CEI Violation")).collect();
+    assert!(cei_findings.is_empty(), "no CPI calls — should have no CEI findings");
+}
+
+#[test]
+fn test_account_closing_detects_manual_lamports() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn close_vault(ctx: Context<Close>) -> Result<()> {
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let vault_lamports = vault_info.lamports();
+        **vault_info.try_borrow_mut_lamports()? = 0;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let close_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Unsafe Account Closing")).collect();
+    assert!(!close_findings.is_empty(), "should detect manual lamports manipulation without close constraint");
+}
+
+#[test]
+fn test_account_closing_skips_when_close_present() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn close_vault(ctx: Context<Close>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(mut, close = authority)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let close_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Unsafe Account Closing")).collect();
+    assert!(close_findings.is_empty(), "should NOT flag when close constraint is present");
+}
