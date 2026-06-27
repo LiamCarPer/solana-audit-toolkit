@@ -1,6 +1,6 @@
 # Solana Audit Toolkit (`sat`)
 
-A static analysis and fuzzing toolkit for Anchor-based Solana programs. Parses IDL and Rust source via `syn` to find missing signer constraints, reinitialization vectors, overflow-prone arithmetic, CPI depth violations, Token-2022 extension risks, and more — before the program hits mainnet.
+A static analysis and fuzzing toolkit for Anchor-based Solana programs. Parses IDL and Rust source via `syn` to find missing signer constraints, reinitialization vectors, CEI ordering violations, unsafe account closing, overflow-prone arithmetic, CPI depth violations, Token-2022 extension risks, and more — before the program hits mainnet.
 
 ```
 $ sat analyze src programs/vault/
@@ -40,6 +40,8 @@ Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` 
 - **Discriminator collisions** — two instructions in the same program hashing to the same 8-byte prefix
 
 **Advanced checks:**
+- **CEI ordering violations** — walks instruction bodies, flags state writes that occur after `invoke()`/`invoke_signed()` calls. References the $320M Wormhole hack rationale.
+- **Account closing safety** — detects `try_borrow_mut_lamports()` or direct `.lamports` manipulation when the program lacks `#[account(close = ...)]` constraints.
 - **CPI depth tracking** — traces `invoke()` / `invoke_signed()` call chains, flags depths exceeding Solana's limit of 4
 - **Sysvar misuse** — instructions calling `Clock::get()`, `Rent::get()`, etc. without declaring the sysvar account, and sysvars incorrectly marked writable
 - **Serialization mismatch** — field width differences between `#[account]` storage structs and instruction argument structs (e.g. `u32` in args, `u64` on-chain)
@@ -116,7 +118,7 @@ sat analyze src crates/sat/src --format sarif
 │   └── ui.rs                 Colored terminal helpers
 ├── crates/sat/tests/
 │   ├── idl_analysis.rs       18 tests (IDL parsing, state model, findings)
-│   ├── ast_analysis.rs       21 tests (signer, owner, mut, seeds, SARIF)
+│   ├── ast_analysis.rs       29 tests (signer, owner, mut, seeds, CEI, closing, SARIF)
 │   └── fixtures/             IDL JSON + Anchor Rust fixtures
 ├── audit-findings/            Pre-shipped finding writeups
 ├── .github/workflows/
