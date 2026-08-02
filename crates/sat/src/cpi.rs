@@ -51,10 +51,10 @@ pub fn analyze_cpi_depth(parsed_files: &[(syn::File, String)], instruction_names
     let mut max_depths: HashMap<String, u32> = HashMap::new();
     let mut unresolved: Vec<String> = Vec::new();
 
-    for calls in call_graph.values() {
+    for (caller, calls) in &call_graph {
         for call in calls {
-            if !call.resolved && call.is_internal {
-                unresolved.push(format!("{} → (unknown target)", call.caller));
+            if !call.resolved {
+                unresolved.push(format!("{caller} → (unknown target)"));
             }
         }
     }
@@ -236,6 +236,15 @@ fn try_resolve_invoke_target(call: &syn::ExprCall) -> Option<String> {
                 if receiver.ends_with("_instruction") {
                     return Some(receiver.replace("_instruction", ""));
                 }
+            }
+        }
+
+        if let syn::Expr::Call(call_expr) = &*ref_expr.expr
+            && let syn::Expr::Path(path) = &*call_expr.func
+        {
+            let name = path.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::");
+            if let Some(target) = name.strip_suffix("_instruction").or_else(|| name.strip_suffix("_ix")) {
+                return Some(target.to_string());
             }
         }
     }

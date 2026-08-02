@@ -463,7 +463,7 @@ fn check_missing_owner(accounts: &[AccountsStruct]) -> Vec<Finding> {
     findings
 }
 
-fn check_missing_mut(accounts: &[AccountsStruct], idl: Option<&IdlJson>) -> Vec<Finding> {
+pub fn check_missing_mut(accounts: &[AccountsStruct], idl: Option<&IdlJson>) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let idl_writable_map: HashMap<String, HashSet<String>> = if let Some(idl) = idl {
@@ -1440,14 +1440,21 @@ pub fn analyze_string_for_test(source: &str) -> (Vec<AccountsStruct>, Vec<Source
     let accounts = extract_accounts_structs(&parsed, &path);
     let instructions = extract_instruction_names(&parsed, &path);
     let storage_fields = extract_account_storage_fields(&parsed);
+    let parsed_files = [(parsed.clone(), "test.rs".to_string())];
+    let ix_names: Vec<String> = instructions.iter().map(|i| i.name.clone()).collect();
     let mut findings = Vec::new();
     findings.extend(check_missing_signer(&accounts));
     findings.extend(check_missing_owner(&accounts));
     findings.extend(check_discriminator_collisions(&instructions));
     findings.extend(check_missing_has_one(&accounts, &storage_fields));
-    findings.extend(check_unsafe_arithmetic(&[(parsed.clone(), "test.rs".to_string())]));
-    findings.extend(check_cei_ordering(&[(parsed.clone(), "test.rs".to_string())], &accounts));
-    findings.extend(check_account_closing(&[(parsed.clone(), "test.rs".to_string())], &accounts));
+    findings.extend(check_reinit_risk(&accounts, &instructions));
+    findings.extend(check_unsafe_arithmetic(&parsed_files));
+    findings.extend(check_cei_ordering(&parsed_files, &accounts));
+    findings.extend(check_account_closing(&parsed_files, &accounts));
+    findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_names));
+    findings.extend(sysvar::check_sysvar_misuse(&parsed_files, &accounts));
+    findings.extend(serialization::check_serialization_mismatch(&parsed_files));
+    findings.extend(token2022::detect_interface_account(&accounts));
     dedupe_findings(&mut findings);
     for (i, f) in findings.iter_mut().enumerate() {
         f.id = format!("SAT-{:03}", i + 1);

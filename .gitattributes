@@ -1,0 +1,5 @@
+# Normalize line endings: LF in the repository for all text files.
+# Rust sources are checked out with LF on every platform so that
+# `cargo fmt --check` (which requires Unix newlines) passes on Windows.
+* text=auto
+*.rs text eol=lf

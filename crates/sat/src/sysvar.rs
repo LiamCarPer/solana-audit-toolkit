@@ -47,7 +47,7 @@ const KNOWN_SYSVARS: &[SysvarDef] = &[
     },
 ];
 
-pub(crate) fn check_sysvar_misuse(parsed_files: &[(syn::File, String)], accounts: &[AccountsStruct]) -> Vec<Finding> {
+pub fn check_sysvar_misuse(parsed_files: &[(syn::File, String)], accounts: &[AccountsStruct]) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let mut sysvar_declared: HashMap<String, Vec<String>> = HashMap::new();
@@ -209,6 +209,18 @@ fn scan_expr_for_sysvar(expr: &syn::Expr, found: &mut HashSet<String>) {
         }
         syn::Expr::Try(et) => scan_expr_for_sysvar(&et.expr, found),
         syn::Expr::Call(ec) => {
+            // `Clock::get()` parses as a call of the path `Clock::get`, not as a
+            // method call — inspect the callee path as well as the arguments.
+            if let syn::Expr::Path(path) = &*ec.func {
+                let name = path.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::");
+                for sysvar in KNOWN_SYSVARS {
+                    if name == format!("{}::get", sysvar.accessor_type)
+                        || name == format!("{}::get_or_create_account", sysvar.accessor_type)
+                    {
+                        found.insert(sysvar.accessor_type.to_string());
+                    }
+                }
+            }
             for arg in &ec.args {
                 scan_expr_for_sysvar(arg, found);
             }

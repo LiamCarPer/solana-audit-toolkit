@@ -10,7 +10,7 @@ struct StorageField {
     ty: String,
 }
 
-pub(crate) fn check_serialization_mismatch(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
+pub fn check_serialization_mismatch(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let mut storage_structs: HashMap<String, Vec<StorageField>> = HashMap::new();

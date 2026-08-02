@@ -74,9 +74,11 @@ pub fn detect_token2022_in_source(
                             ));
                         }
 
-                        let has_interface_account =
-                            body_source.to_lowercase().contains("interfaceaccount<tokenaccount")
-                                || body_source.to_lowercase().contains("interfaceaccount<mint");
+                        let has_interface_account = {
+                            let lower = body_source.to_lowercase();
+                            lower.contains("interfaceaccount<")
+                                && (lower.contains("tokenaccount") || lower.contains("mint"))
+                        };
 
                         if has_interface_account {
                             found_token2022_usage = true;
@@ -130,7 +132,9 @@ pub fn detect_interface_account(accounts: &[AccountsStruct]) -> Vec<Finding> {
         for field in &accts.fields {
             let ty_lower = field.ty_name.to_lowercase();
 
-            if ty_lower.contains("interfaceaccount<tokenaccount") || ty_lower.contains("interfaceaccount<mint") {
+            if ty_lower.contains("interfaceaccount<")
+                && (ty_lower.contains("tokenaccount") || ty_lower.contains("mint"))
+            {
                 findings.push(Finding {
                     id: String::new(),
                     title: format!(

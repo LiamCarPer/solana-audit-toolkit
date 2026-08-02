@@ -46,7 +46,7 @@ struct TxReportPda {
     bump: Option<u8>,
 }
 
-pub(crate) fn check_tx_report_correlation(accounts: &[AccountsStruct], tx_report_path: &str) -> Vec<Finding> {
+pub fn check_tx_report_correlation(accounts: &[AccountsStruct], tx_report_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let content = match std::fs::read_to_string(tx_report_path) {

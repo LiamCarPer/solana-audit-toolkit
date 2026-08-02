@@ -312,17 +312,16 @@ fn test_sarif_export_produces_valid_json() {
         suggestion: Some("Fix it".to_string()),
     }];
 
-    let output_path = "/tmp/sat_test_sarif.json";
-    sarif::export_sarif(&findings, "test_program", output_path).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let output_path = dir.path().join("sat_test_sarif.json");
+    sarif::export_sarif(&findings, "test_program", output_path.to_str().unwrap()).unwrap();
 
-    let content = fs::read_to_string(output_path).unwrap();
+    let content = fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
 
     assert_eq!(parsed["version"], "2.1.0");
     assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 1);
     assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "sat");
-
-    fs::remove_file(output_path).unwrap();
 }
 
 #[test]
@@ -331,14 +330,13 @@ fn test_sarif_empty_findings() {
     use std::fs;
 
     let findings: Vec<sat::types::Finding> = vec![];
-    let output_path = "/tmp/sat_test_empty.sarif";
-    sarif::export_sarif(&findings, "test", output_path).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let output_path = dir.path().join("sat_test_empty.sarif");
+    sarif::export_sarif(&findings, "test", output_path.to_str().unwrap()).unwrap();
 
-    let content = fs::read_to_string(output_path).unwrap();
+    let content = fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
     assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 0);
-
-    fs::remove_file(output_path).unwrap();
 }
 
 #[test]
@@ -392,11 +390,21 @@ fn test_fixture_sysvar_issues_parses() {
     use std::fs;
     let path = "tests/fixtures_ast/vulnerable/sysvar_issues.rs";
     let source = fs::read_to_string(path).unwrap();
-    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let (accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
 
     assert!(!accounts.is_empty(), "sysvar fixture should parse and find Accounts structs");
     let get_time = accounts.iter().find(|a| a.name == "GetTime").unwrap();
     assert!(get_time.fields.iter().any(|f| f.name == "authority"));
+
+    let missing_sysvar: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Sysvar")).collect();
+    assert!(
+        missing_sysvar.iter().any(|f| f.title.contains("Clock")),
+        "Clock::get() without a declared clock sysvar should be flagged"
+    );
+    assert!(
+        !missing_sysvar.iter().any(|f| f.title.contains("Rent")),
+        "Rent::get() must not be flagged because UseRent declares `rent: Sysvar<'info, Rent>`"
+    );
 }
 
 #[test]
@@ -684,4 +692,450 @@ pub struct Vault {
     let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
     let close_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Unsafe Account Closing")).collect();
     assert!(close_findings.is_empty(), "should NOT flag when close constraint is present");
+}
+
+// ── SARIF location parsing (A2) ───────────────────────────────────────────────
+
+#[test]
+fn test_sarif_extracts_uri_and_line_from_location() {
+    use sat::sarif;
+    use sat::types::Finding;
+    use std::fs;
+
+    let findings = vec![Finding {
+        id: "SAT-001".to_string(),
+        title: "Missing Signer".to_string(),
+        severity: Severity::High,
+        description: "Test finding".to_string(),
+        location: Some("src/lib.rs:42 (Foo::bar)".to_string()),
+        suggestion: Some("Fix it".to_string()),
+    }];
+
+    let dir = tempfile::tempdir().unwrap();
+    let output_path = dir.path().join("sat_test_location.json");
+    sarif::export_sarif(&findings, "test_program", output_path.to_str().unwrap()).unwrap();
+
+    let content = fs::read_to_string(&output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let physical = &parsed["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
+    assert_eq!(physical["artifactLocation"]["uri"], "src/lib.rs");
+    assert_eq!(physical["region"]["startLine"], 42);
+}
+
+#[test]
+fn test_sarif_windows_path_location_parses_drive_letter() {
+    use sat::sarif;
+    use sat::types::Finding;
+    use std::fs;
+
+    let findings = vec![Finding {
+        id: "SAT-001".to_string(),
+        title: "Missing Signer".to_string(),
+        severity: Severity::High,
+        description: "Test finding".to_string(),
+        location: Some("C:\\repo\\src\\lib.rs:42 (Foo::bar)".to_string()),
+        suggestion: None,
+    }];
+
+    let dir = tempfile::tempdir().unwrap();
+    let output_path = dir.path().join("sat_test_win.json");
+    sarif::export_sarif(&findings, "test_program", output_path.to_str().unwrap()).unwrap();
+
+    let content = fs::read_to_string(&output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let physical = &parsed["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
+    assert_eq!(physical["artifactLocation"]["uri"], "C:\\repo\\src\\lib.rs");
+    assert_eq!(physical["region"]["startLine"], 42);
+}
+
+#[test]
+fn test_sarif_location_without_line_omits_region_line() {
+    use sat::sarif;
+    use sat::types::Finding;
+    use std::fs;
+
+    let findings = vec![Finding {
+        id: "SAT-001".to_string(),
+        title: "Sysvar Misuse".to_string(),
+        severity: Severity::High,
+        description: "Test finding".to_string(),
+        location: Some("Sysvar: rent (SysvarRent111111111111111111111111111111111)".to_string()),
+        suggestion: None,
+    }];
+
+    let dir = tempfile::tempdir().unwrap();
+    let output_path = dir.path().join("sat_test_noline.json");
+    sarif::export_sarif(&findings, "test_program", output_path.to_str().unwrap()).unwrap();
+
+    let content = fs::read_to_string(&output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let physical = &parsed["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
+    assert_eq!(
+        physical["artifactLocation"]["uri"], "Sysvar: rent (SysvarRent111111111111111111111111111111111)",
+        "locations without a line fall back to the whole string as the URI"
+    );
+    assert!(physical["region"].get("startLine").is_none(), "no startLine should be emitted without a line number");
+}
+
+// ── Coverage gaps (A5) ────────────────────────────────────────────────────────
+
+#[test]
+fn test_serialization_mismatch_detected() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn update(ctx: Context<Update>, input: UpdateArgs) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(mut)]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct State {
+    pub total: u64,
+}
+
+pub struct UpdateArgs {
+    pub total: u32,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let mismatch: Vec<_> = findings.iter().filter(|f| f.title.contains("Serialization Mismatch")).collect();
+    assert_eq!(mismatch.len(), 1, "u32 arg vs u64 storage should be flagged");
+    assert_eq!(mismatch[0].severity, Severity::High);
+    assert!(mismatch[0].description.contains("truncation"));
+}
+
+#[test]
+fn test_serialization_matching_widths_no_finding() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn update(ctx: Context<Update>, input: UpdateArgs) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(mut)]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct State {
+    pub total: u64,
+}
+
+pub struct UpdateArgs {
+    pub total: u64,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let mismatch: Vec<_> = findings.iter().filter(|f| f.title.contains("Serialization Mismatch")).collect();
+    assert!(mismatch.is_empty(), "matching widths should not be flagged");
+}
+
+fn vault_deposit_idl() -> sat::idl::IdlJson {
+    use sat::idl::{IdlAccountItem, IdlInstruction, IdlJson};
+
+    IdlJson {
+        version: "0.1.0".to_string(),
+        name: "vault".to_string(),
+        instructions: vec![IdlInstruction {
+            name: "deposit".to_string(),
+            accounts: vec![IdlAccountItem {
+                name: "vault".to_string(),
+                is_mut: true,
+                is_signer: false,
+                pda: None,
+                desc: None,
+            }],
+            args: vec![],
+            discriminator: None,
+        }],
+        accounts: vec![],
+        types: vec![],
+        metadata: None,
+    }
+}
+
+#[test]
+fn test_missing_mut_detected_via_idl() {
+    let source = r#"
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub balance: u64,
+}
+"#;
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(source);
+    let findings = sat::analyzer::check_missing_mut(&accounts, Some(&vault_deposit_idl()));
+    let mut_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing `mut`")).collect();
+    assert_eq!(mut_findings.len(), 1, "IDL marks vault writable but there is no #[account(mut)]");
+    assert_eq!(mut_findings[0].severity, Severity::High);
+}
+
+#[test]
+fn test_missing_mut_skipped_when_mut_present() {
+    let source = r#"
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub balance: u64,
+}
+"#;
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(source);
+    let findings = sat::analyzer::check_missing_mut(&accounts, Some(&vault_deposit_idl()));
+    let mut_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing `mut`")).collect();
+    assert!(mut_findings.is_empty(), "declared #[account(mut)] should satisfy the check");
+}
+
+#[test]
+fn test_tx_report_correlation_detects_signer_mismatch() {
+    let source = r#"
+#[derive(Accounts)]
+pub struct TransferTokens<'info> {
+    #[account(mut)]
+    pub from: Account<'info, TokenAccount>,
+    #[account(signer)]
+    pub authority: AccountInfo<'info>,
+}
+"#;
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(source);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("tx_report.json");
+    std::fs::write(
+        &report_path,
+        r#"{
+            "schema_version": "1.0",
+            "program_name": "test",
+            "instructions": [
+                {
+                    "name": "TransferTokens",
+                    "accounts": [
+                        {"name": "from", "is_signer": false, "is_writable": true},
+                        {"name": "authority", "is_signer": false, "is_writable": false}
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let findings = sat::tx_report::check_tx_report_correlation(&accounts, report_path.to_str().unwrap());
+    let signer_mismatch: Vec<_> = findings.iter().filter(|f| f.title.contains("Tx-Report Mismatch")).collect();
+    assert_eq!(signer_mismatch.len(), 1, "authority is declared signer but was not a signer at runtime");
+    assert_eq!(signer_mismatch[0].severity, Severity::Critical);
+}
+
+#[test]
+fn test_tx_report_invalid_json_returns_info_finding() {
+    let source = r#"
+#[derive(Accounts)]
+pub struct Foo<'info> {
+    pub authority: Signer<'info>,
+}
+"#;
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(source);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("bad.json");
+    std::fs::write(&report_path, "not json").unwrap();
+
+    let findings = sat::tx_report::check_tx_report_correlation(&accounts, report_path.to_str().unwrap());
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].title.contains("Failed to parse"), "{}", findings[0].title);
+    assert_eq!(findings[0].severity, Severity::Informational);
+}
+
+#[test]
+fn test_token2022_fixture_detects_fee_bypass_and_interfaces() {
+    use std::fs;
+
+    let path = "tests/fixtures_ast/vulnerable/token2022_transfer.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let parsed = syn::parse_file(&source).unwrap();
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let parsed_files = vec![(parsed, path.to_string())];
+
+    let findings =
+        sat::token2022::analyze(std::path::Path::new("tests/fixtures_ast/vulnerable"), &parsed_files, &accounts);
+
+    let fee_bypass: Vec<_> = findings.iter().filter(|f| f.title.contains("Transfer Fee Bypass")).collect();
+    assert_eq!(fee_bypass.len(), 1, "transfer_checked with no fee handling should be flagged");
+    assert_eq!(fee_bypass[0].severity, Severity::High);
+
+    let interface: Vec<_> = findings.iter().filter(|f| f.title.contains("Token-2022 InterfaceAccount")).collect();
+    assert_eq!(interface.len(), 3, "from/to/mint are InterfaceAccount fields");
+}
+
+#[test]
+fn test_interface_account_detection_positive_and_negative() {
+    let positive = r#"
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub from: InterfaceAccount<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+"#;
+    let (accounts, _, _) = sat::analyzer::analyze_string_for_test(positive);
+    let findings = sat::token2022::detect_interface_account(&accounts);
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].title.contains("from"));
+
+    let negative = r#"
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub from: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+"#;
+    let (accounts, _, _) = sat::analyzer::analyze_string_for_test(negative);
+    let findings = sat::token2022::detect_interface_account(&accounts);
+    assert!(findings.is_empty(), "plain Account<TokenAccount> is not an interface account");
+}
+
+#[test]
+fn test_cpi_depth_flags_overflow_chain() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn a(ctx: Context<Empty>) -> Result<()> {
+        invoke(&b_instruction(ctx.accounts.x.key()), &[ctx.accounts.x.to_account_info()])?;
+        Ok(())
+    }
+
+    pub fn b(ctx: Context<Empty>) -> Result<()> {
+        invoke(&c_instruction(ctx.accounts.x.key()), &[ctx.accounts.x.to_account_info()])?;
+        Ok(())
+    }
+
+    pub fn c(ctx: Context<Empty>) -> Result<()> {
+        invoke(&d_instruction(ctx.accounts.x.key()), &[ctx.accounts.x.to_account_info()])?;
+        Ok(())
+    }
+
+    pub fn d(ctx: Context<Empty>) -> Result<()> {
+        invoke(&e_instruction(ctx.accounts.x.key()), &[ctx.accounts.x.to_account_info()])?;
+        Ok(())
+    }
+
+    pub fn e(ctx: Context<Empty>) -> Result<()> {
+        invoke(&f_instruction(ctx.accounts.x.key()), &[ctx.accounts.x.to_account_info()])?;
+        Ok(())
+    }
+
+    pub fn f(ctx: Context<Empty>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Empty<'info> {
+    pub x: AccountInfo<'info>,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let overflow: Vec<_> = findings.iter().filter(|f| f.title.contains("CPI Depth Overflow")).collect();
+    assert!(!overflow.is_empty(), "a→f chain exceeds the Solana CPI depth limit of 4");
+    assert_eq!(overflow[0].severity, Severity::Critical);
+    assert!(overflow[0].title.contains("`a`"), "the entry-point instruction should be flagged");
+}
+
+#[test]
+fn test_cpi_depth_ok_below_limit() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn a(ctx: Context<Empty>) -> Result<()> {
+        invoke(&b_instruction(ctx.accounts.x.key()), &[ctx.accounts.x.to_account_info()])?;
+        Ok(())
+    }
+
+    pub fn b(ctx: Context<Empty>) -> Result<()> {
+        invoke(&c_instruction(ctx.accounts.x.key()), &[ctx.accounts.x.to_account_info()])?;
+        Ok(())
+    }
+
+    pub fn c(ctx: Context<Empty>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Empty<'info> {
+    pub x: AccountInfo<'info>,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let overflow: Vec<_> = findings.iter().filter(|f| f.title.contains("CPI Depth Overflow")).collect();
+    assert!(overflow.is_empty(), "depth-3 chain is within the limit");
+}
+
+#[test]
+fn test_cpi_depth_unresolved_warning() {
+    let source = r#"
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn withdraw(ctx: Context<Withdraw>) -> Result<()> {
+        let cpi_instruction = Instruction { program_id: ctx.accounts.token_program.key(), accounts: vec![], data: vec![] };
+        invoke(&cpi_instruction, &[ctx.accounts.token_program.to_account_info()])?;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    pub token_program: AccountInfo<'info>,
+    pub authority: Signer<'info>,
+}
+"#;
+
+    let (_accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(source);
+    let unresolved: Vec<_> = findings.iter().filter(|f| f.title.contains("CPI Depth Unresolved")).collect();
+    assert_eq!(unresolved.len(), 1, "untraceable invoke target should produce an informational warning");
+    assert_eq!(unresolved[0].severity, Severity::Informational);
 }
