@@ -8,6 +8,7 @@ use walkdir::WalkDir;
 
 use crate::cpi;
 use crate::idl::{self, IdlJson};
+use crate::pda;
 use crate::sarif;
 use crate::token2022;
 use crate::types::{Finding, Severity};
@@ -1018,7 +1019,7 @@ fn expr_to_string_v2(expr: &syn::Expr) -> String {
 
 // ── CEI ordering analysis ─────────────────────────────────────────────────────
 
-fn check_cei_ordering(parsed_files: &[(syn::File, String)], accounts: &[AccountsStruct]) -> Vec<Finding> {
+fn check_cei_ordering(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for (file, path_str) in parsed_files {
@@ -1034,7 +1035,7 @@ fn check_cei_ordering(parsed_files: &[(syn::File, String)], accounts: &[Accounts
                         {
                             let fn_name = func.sig.ident.to_string();
                             let body = &func.block;
-                            detect_cei_violation(body, &fn_name, path_str, accounts, &mut findings);
+                            detect_cei_violation(body, &fn_name, path_str, &mut findings);
                         }
                     }
                 }
@@ -1045,118 +1046,227 @@ fn check_cei_ordering(parsed_files: &[(syn::File, String)], accounts: &[Accounts
     findings
 }
 
-fn detect_cei_violation(
-    block: &syn::Block,
-    fn_name: &str,
-    file: &str,
-    _accounts: &[AccountsStruct],
-    findings: &mut Vec<Finding>,
-) {
-    let mut cpi_positions: Vec<usize> = Vec::new();
-
-    for (i, stmt) in block.stmts.iter().enumerate() {
-        if stmt_contains_cpi(stmt) {
-            cpi_positions.push(i);
-        }
-    }
-
-    if cpi_positions.is_empty() {
-        return;
-    }
-
-    let last_cpi = *cpi_positions.last().unwrap();
-
-    for (_i, stmt) in block.stmts.iter().enumerate().skip(last_cpi + 1) {
-        let writes = stmt_finds_account_writes(stmt);
-        if !writes.is_empty() {
-            let line = stmt_span_line(stmt).unwrap_or_default();
-            findings.push(Finding {
-                id: String::new(),
-                title: format!("CEI Violation: `{fn_name}` writes state after external call — reentrancy risk"),
-                severity: Severity::Critical,
-                description: format!(
-                    "The instruction `{fn_name}` writes to account state ({}) after calling an \
-                     external program via `invoke()` or `invoke_signed()`. This violates the \
-                     Checks-Effects-Interactions (CEI) pattern and enables reentrancy attacks. \
-                     The external program can re-enter this instruction during the CPI callback \
-                     and observe stale state, allowing double-spends or unauthorized withdrawals. \
-                     This is the vulnerability class behind the $320M Wormhole hack.",
-                    writes.join(", ")
-                ),
-                location: Some(format!("{file}:{line} ({fn_name})")),
-                suggestion: Some(
-                    "Move all state writes BEFORE any CPI/invoke() calls. Apply the pattern: \
-                     1. Checks (validate inputs), 2. Effects (update state), 3. Interactions (CPI). \
-                     If state must be updated after the CPI, use a reentrancy guard flag."
-                        .to_string(),
-                ),
-            });
-            return;
-        }
-    }
+/// Detects a CEI (Checks-Effects-Interactions) ordering violation in `block`: a state
+/// write that executes after an external `invoke`/`invoke_signed` call. Emits at most
+/// one finding per function.
+fn detect_cei_violation(block: &syn::Block, fn_name: &str, file: &str, findings: &mut Vec<Finding>) {
+    walk_cei_block(block, fn_name, file, findings);
 }
 
-fn stmt_contains_cpi(stmt: &syn::Stmt) -> bool {
-    match stmt {
-        syn::Stmt::Expr(expr, _) => expr_contains_cpi(expr),
-        syn::Stmt::Local(local) => {
-            if let Some(init) = &local.init {
-                expr_contains_cpi(&init.expr)
-            } else {
-                false
+/// Walks the statements of `block` in program order, tracking whether a CPI has been
+/// seen in the current sequential flow. Returns `(found, cpi_out)`:
+/// - `found`: a violation was found and the finding was already pushed — callers must
+///   stop walking.
+/// - `cpi_out`: whether a CPI was seen unconditionally in this block; the flag state
+///   for whatever follows the block (used for bare blocks, which always execute).
+fn walk_cei_block(block: &syn::Block, fn_name: &str, file: &str, findings: &mut Vec<Finding>) -> (bool, bool) {
+    let mut cpi_seen = false;
+    for stmt in &block.stmts {
+        if cpi_seen {
+            // A CPI ran before this statement, so any write anywhere inside it — no
+            // matter how deeply nested — is a post-interaction state write.
+            let writes = stmt_finds_account_writes(stmt);
+            if !writes.is_empty() {
+                push_cei_finding(stmt, &writes, fn_name, file, findings);
+                return (true, true);
             }
+            continue;
         }
-        _ => false,
+        match stmt {
+            syn::Stmt::Expr(expr, _) => {
+                let (found, escapes) = walk_cei_expr(expr, fn_name, file, findings);
+                if found {
+                    return (true, true);
+                }
+                if escapes {
+                    cpi_seen = true;
+                }
+            }
+            syn::Stmt::Local(local) => {
+                if let Some(init) = &local.init {
+                    let (found, escapes) = walk_cei_expr(&init.expr, fn_name, file, findings);
+                    if found {
+                        return (true, true);
+                    }
+                    if escapes {
+                        cpi_seen = true;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
+    (false, cpi_seen)
 }
 
-fn expr_contains_cpi(expr: &syn::Expr) -> bool {
+/// Walks an expression looking for state writes that execute after a CPI inside its
+/// nested blocks (if/match/loops). Each branch, match arm, and loop body is entered
+/// with the flag state as of before the enclosing construct, so a CPI in one branch
+/// never leaks into a sibling branch or into statements that follow the construct.
+/// Returns `(found, escapes)`:
+/// - `found`: a violation was found and the finding was already pushed.
+/// - `escapes`: the expression unconditionally performs a CPI, so the flag must be set
+///   for the statements that follow in the enclosing block.
+fn walk_cei_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings: &mut Vec<Finding>) -> (bool, bool) {
     match expr {
         syn::Expr::Call(call) => {
-            let callee = expr_to_string_v2(&call.func);
-            if callee == "invoke"
-                || callee == "invoke_signed"
-                || callee.ends_with("::invoke")
-                || callee.ends_with("::invoke_signed")
-            {
-                return true;
+            if is_cpi_call(call) {
+                // Top-level invoke/invoke_signed: the CPI is unconditional. The call
+                // arguments evaluate before the call, so no write in this statement
+                // happens "after" the CPI.
+                return (false, true);
             }
-            call.args.iter().any(expr_contains_cpi)
+            let mut found = false;
+            let mut escapes = false;
+            for arg in &call.args {
+                let (arg_found, arg_escapes) = walk_cei_expr(arg, fn_name, file, findings);
+                found |= arg_found;
+                escapes |= arg_escapes;
+            }
+            (found, escapes)
         }
         syn::Expr::MethodCall(mc) => {
             if mc.method == "invoke" || mc.method == "invoke_signed" {
-                return true;
+                return (false, true);
             }
-            expr_contains_cpi(&mc.receiver)
+            walk_cei_expr(&mc.receiver, fn_name, file, findings)
         }
-        syn::Expr::Block(be) => be.block.stmts.iter().any(stmt_contains_cpi),
+        // A bare block always executes, so a CPI seen unconditionally inside it
+        // propagates to the statements that follow it.
+        syn::Expr::Block(be) => walk_cei_block(&be.block, fn_name, file, findings),
         syn::Expr::If(ei) => {
-            expr_contains_cpi(&ei.cond)
-                || ei.then_branch.stmts.iter().any(stmt_contains_cpi)
-                || ei.else_branch.as_ref().is_some_and(|(_, e)| expr_contains_cpi(e))
+            let (found, _) = walk_cei_expr(&ei.cond, fn_name, file, findings);
+            if found {
+                return (true, true);
+            }
+            // Each branch starts from the pre-if flag state: a CPI in one branch must
+            // not affect the other branch or the statements after the if.
+            let (found, _) = walk_cei_block(&ei.then_branch, fn_name, file, findings);
+            if found {
+                return (true, true);
+            }
+            if let Some((_, else_expr)) = &ei.else_branch {
+                let (found, _) = walk_cei_expr(else_expr, fn_name, file, findings);
+                if found {
+                    return (true, true);
+                }
+            }
+            (false, false)
         }
-        syn::Expr::Try(et) => expr_contains_cpi(&et.expr),
-        syn::Expr::Unary(unary) => expr_contains_cpi(&unary.expr),
-        syn::Expr::Match(em) => em.arms.iter().any(|arm| expr_contains_cpi(&arm.body)),
-        syn::Expr::Let(el) => expr_contains_cpi(&el.expr),
-        _ => false,
+        syn::Expr::Match(em) => {
+            let (found, _) = walk_cei_expr(&em.expr, fn_name, file, findings);
+            if found {
+                return (true, true);
+            }
+            for arm in &em.arms {
+                if let Some((_, guard)) = &arm.guard {
+                    let (found, _) = walk_cei_expr(guard, fn_name, file, findings);
+                    if found {
+                        return (true, true);
+                    }
+                }
+                // Each arm starts from the pre-match flag state (branch isolation).
+                let (found, _) = walk_cei_expr(&arm.body, fn_name, file, findings);
+                if found {
+                    return (true, true);
+                }
+            }
+            (false, false)
+        }
+        syn::Expr::ForLoop(fl) => {
+            let (found, _) = walk_cei_expr(&fl.expr, fn_name, file, findings);
+            if found {
+                return (true, true);
+            }
+            // The body is entered with the pre-loop flag state, and a CPI inside it
+            // never escapes to statements after the loop (the loop may not iterate).
+            let (found, _) = walk_cei_block(&fl.body, fn_name, file, findings);
+            (found, false)
+        }
+        syn::Expr::While(wl) => {
+            let (found, _) = walk_cei_expr(&wl.cond, fn_name, file, findings);
+            if found {
+                return (true, true);
+            }
+            let (found, _) = walk_cei_block(&wl.body, fn_name, file, findings);
+            (found, false)
+        }
+        syn::Expr::Loop(loop_expr) => {
+            let (found, _) = walk_cei_block(&loop_expr.body, fn_name, file, findings);
+            (found, false)
+        }
+        syn::Expr::Try(et) => walk_cei_expr(&et.expr, fn_name, file, findings),
+        syn::Expr::Unary(unary) => walk_cei_expr(&unary.expr, fn_name, file, findings),
+        syn::Expr::Let(el) => walk_cei_expr(&el.expr, fn_name, file, findings),
+        syn::Expr::Paren(paren) => walk_cei_expr(&paren.expr, fn_name, file, findings),
+        _ => (false, false),
     }
 }
 
+fn is_cpi_call(call: &syn::ExprCall) -> bool {
+    let callee = expr_to_string_v2(&call.func);
+    callee == "invoke"
+        || callee == "invoke_signed"
+        || callee.ends_with("::invoke")
+        || callee.ends_with("::invoke_signed")
+}
+
+/// Emits the CEI violation finding for a state write that follows an external call.
+/// The shape (title, severity, description, suggestion) is shared by every detection
+/// path; `stmt` is the statement that contains the write and supplies the location.
+fn push_cei_finding(stmt: &syn::Stmt, writes: &[String], fn_name: &str, file: &str, findings: &mut Vec<Finding>) {
+    let line = stmt_span_line(stmt).unwrap_or_default();
+    findings.push(Finding {
+        id: String::new(),
+        title: format!("CEI Violation: `{fn_name}` writes state after external call — reentrancy risk"),
+        severity: Severity::Critical,
+        description: format!(
+            "The instruction `{fn_name}` writes to account state ({}) after calling an \
+             external program via `invoke()` or `invoke_signed()`. This violates the \
+             Checks-Effects-Interactions (CEI) pattern and enables reentrancy attacks. \
+             The external program can re-enter this instruction during the CPI callback \
+             and observe stale state, allowing double-spends or unauthorized withdrawals. \
+             This is the vulnerability class behind the $320M Wormhole hack.",
+            writes.join(", ")
+        ),
+        location: Some(format!("{file}:{line} ({fn_name})")),
+        suggestion: Some(
+            "Move all state writes BEFORE any CPI/invoke() calls. Apply the pattern: \
+             1. Checks (validate inputs), 2. Effects (update state), 3. Interactions (CPI). \
+             If state must be updated after the CPI, use a reentrancy guard flag."
+                .to_string(),
+        ),
+    });
+}
+
+/// Finds account state writes in `stmt`, recursing into nested blocks (if/match/loops)
+/// so writes hidden inside control flow are still detected.
 fn stmt_finds_account_writes(stmt: &syn::Stmt) -> Vec<String> {
     let mut writes = Vec::new();
+    collect_stmt_account_writes(stmt, &mut writes);
+    writes
+}
+
+fn collect_stmt_account_writes(stmt: &syn::Stmt, writes: &mut Vec<String>) {
     match stmt {
-        syn::Stmt::Expr(expr, _) => find_account_writes_in_expr(expr, &mut writes),
+        syn::Stmt::Expr(expr, _) => find_account_writes_in_expr(expr, writes),
         syn::Stmt::Local(local) => {
             if let Some(init) = &local.init {
-                find_account_writes_in_expr(&init.expr, &mut writes);
+                find_account_writes_in_expr(&init.expr, writes);
             }
         }
         _ => {}
     }
-    writes
 }
 
+fn find_account_writes_in_block(block: &syn::Block, writes: &mut Vec<String>) {
+    for stmt in &block.stmts {
+        collect_stmt_account_writes(stmt, writes);
+    }
+}
+
+/// Collects account state writes (`ctx.accounts.*` field updates and assignments to
+/// `.balance`/`.amount`/`.data` fields) anywhere inside `expr`, including nested blocks.
 fn find_account_writes_in_expr(expr: &syn::Expr, writes: &mut Vec<String>) {
     match expr {
         syn::Expr::Binary(binary) => {
@@ -1189,7 +1299,45 @@ fn find_account_writes_in_expr(expr: &syn::Expr, writes: &mut Vec<String>) {
                 push_unique_str(writes, &receiver);
             }
             find_account_writes_in_expr(&mc.receiver, writes);
+            for arg in &mc.args {
+                find_account_writes_in_expr(arg, writes);
+            }
         }
+        syn::Expr::Block(be) => find_account_writes_in_block(&be.block, writes),
+        syn::Expr::If(ei) => {
+            find_account_writes_in_expr(&ei.cond, writes);
+            find_account_writes_in_block(&ei.then_branch, writes);
+            if let Some((_, else_expr)) = &ei.else_branch {
+                find_account_writes_in_expr(else_expr, writes);
+            }
+        }
+        syn::Expr::Match(em) => {
+            find_account_writes_in_expr(&em.expr, writes);
+            for arm in &em.arms {
+                if let Some((_, guard)) = &arm.guard {
+                    find_account_writes_in_expr(guard, writes);
+                }
+                find_account_writes_in_expr(&arm.body, writes);
+            }
+        }
+        syn::Expr::ForLoop(fl) => {
+            find_account_writes_in_expr(&fl.expr, writes);
+            find_account_writes_in_block(&fl.body, writes);
+        }
+        syn::Expr::While(wl) => {
+            find_account_writes_in_expr(&wl.cond, writes);
+            find_account_writes_in_block(&wl.body, writes);
+        }
+        syn::Expr::Loop(loop_expr) => find_account_writes_in_block(&loop_expr.body, writes),
+        syn::Expr::Call(call) => {
+            for arg in &call.args {
+                find_account_writes_in_expr(arg, writes);
+            }
+        }
+        syn::Expr::Try(et) => find_account_writes_in_expr(&et.expr, writes),
+        syn::Expr::Unary(unary) => find_account_writes_in_expr(&unary.expr, writes),
+        syn::Expr::Let(el) => find_account_writes_in_expr(&el.expr, writes),
+        syn::Expr::Paren(paren) => find_account_writes_in_expr(&paren.expr, writes),
         _ => {}
     }
 }
@@ -1385,11 +1533,12 @@ pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&st
     all_findings.extend(check_missing_has_one(&all_accounts, &storage_fields));
     all_findings.extend(check_reinit_risk(&all_accounts, &all_instructions));
     all_findings.extend(check_unsafe_arithmetic(&parsed_files));
-    all_findings.extend(check_cei_ordering(&parsed_files, &all_accounts));
+    all_findings.extend(check_cei_ordering(&parsed_files));
     all_findings.extend(check_account_closing(&parsed_files, &all_accounts));
     all_findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_name_strings));
     all_findings.extend(sysvar::check_sysvar_misuse(&parsed_files, &all_accounts));
     all_findings.extend(serialization::check_serialization_mismatch(&parsed_files));
+    all_findings.extend(pda::check_pda_seed_mismatch(&all_accounts, idl.as_ref(), &parsed_files));
     all_findings.extend(token2022::analyze(&src_path, &parsed_files, &all_accounts));
 
     if let Some(report_path) = tx_report {
@@ -1449,11 +1598,12 @@ pub fn analyze_string_for_test(source: &str) -> (Vec<AccountsStruct>, Vec<Source
     findings.extend(check_missing_has_one(&accounts, &storage_fields));
     findings.extend(check_reinit_risk(&accounts, &instructions));
     findings.extend(check_unsafe_arithmetic(&parsed_files));
-    findings.extend(check_cei_ordering(&parsed_files, &accounts));
+    findings.extend(check_cei_ordering(&parsed_files));
     findings.extend(check_account_closing(&parsed_files, &accounts));
     findings.extend(cpi::analyze_cpi_depth(&parsed_files, &ix_names));
     findings.extend(sysvar::check_sysvar_misuse(&parsed_files, &accounts));
     findings.extend(serialization::check_serialization_mismatch(&parsed_files));
+    findings.extend(pda::check_pda_seed_mismatch(&accounts, None, &parsed_files));
     findings.extend(token2022::detect_interface_account(&accounts));
     dedupe_findings(&mut findings);
     for (i, f) in findings.iter_mut().enumerate() {

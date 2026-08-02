@@ -45,6 +45,7 @@ Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` 
 - **CPI depth tracking** — traces `invoke()` / `invoke_signed()` call chains, flags depths exceeding Solana's limit of 4
 - **Sysvar misuse** — instructions calling `Clock::get()`, `Rent::get()`, etc. without declaring the sysvar account, and sysvars incorrectly marked writable
 - **Serialization mismatch** — field width differences between `#[account]` storage structs and instruction argument structs (e.g. `u32` in args, `u64` on-chain)
+- **PDA seed cross-check** — compares IDL-declared PDA seeds against `#[account(seeds = ...)]` constraints and flags divergences that enable account substitution
 
 **Token-2022:**
 - Detects usage via program ID, `Cargo.toml` dependency, and `InterfaceAccount<TokenAccount>` / `InterfaceAccount<Mint>` types
@@ -69,6 +70,17 @@ Generates a `fuzzer/` sub-crate from the Anchor IDL:
 - `sat fuzz run` builds and executes with `cargo fuzz` (60s timeout)
 
 The generated fuzzer is intentionally honest: it is useful scaffolding immediately, but meaningful deep execution still requires replacing placeholder account data with target-specific account layouts.
+
+### `sat verify init`
+
+Generates a `formal-verification/` sub-crate for Kani-based formal verification:
+
+- Kani mocks for `AccountInfo`, `Clock`, and `Rent` so proof harnesses run without a Solana runtime
+- Checked-arithmetic templates covering overflow, underflow, and wrapping paths
+- `#[kani::proof]` harnesses for security-sensitive instruction logic
+- Run with `cargo kani` from the generated crate
+
+The generated harnesses encode the same invariants the analyzer checks statically, giving a machine-checked second opinion before deploy.
 
 ### `sat report new`
 
@@ -113,12 +125,17 @@ sat analyze src crates/sat/src --format sarif
 │   ├── token2022.rs          Token-2022 detection + auditing
 │   ├── reporter.rs           Interactive finding generator
 │   ├── fuzzer.rs             Fuzz harness generation
+│   ├── pda.rs                PDA seed cross-check (IDL vs. Anchor constraints)
 │   ├── sarif.rs              SARIF 2.1.0 export
 │   ├── types.rs              Shared types (Finding, Severity)
-│   └── ui.rs                 Colored terminal helpers
+│   ├── ui.rs                 Colored terminal helpers
+│   └── verify.rs             Kani formal-verification scaffolding generator
 ├── crates/sat/tests/
 │   ├── idl_analysis.rs       18 tests (IDL parsing, state model, findings)
-│   ├── ast_analysis.rs       29 tests (signer, owner, mut, seeds, CEI, closing, SARIF)
+│   ├── ast_analysis.rs       43 tests (signer, owner, mut, seeds, CEI, closing, SARIF)
+│   ├── cei_analysis.rs       9 tests (CEI ordering incl. nested blocks)
+│   ├── pda_seed_analysis.rs  6 tests (PDA seed cross-check)
+│   ├── sarif_rules.rs        5 tests (SARIF rule classification)
 │   └── fixtures/             IDL JSON + Anchor Rust fixtures
 ├── audit-findings/            Pre-shipped finding writeups
 ├── .github/workflows/

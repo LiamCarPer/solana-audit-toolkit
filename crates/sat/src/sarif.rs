@@ -110,6 +110,12 @@ const RULES: &[(&str, &str, &str)] = &[
     ("SAT011", "Tx-Report Mismatch", "Runtime transaction data differs from declared constraints."),
     ("SAT012", "Unsafe Arithmetic", "Arithmetic on security-sensitive values lacks checked operations."),
     ("SAT013", "Token-2022 Risk", "Token-2022 usage requires extension-specific accounting checks."),
+    ("SAT014", "CEI Violation", "State write occurs after an external call (CPI), enabling reentrancy attacks."),
+    (
+        "SAT015",
+        "PDA Seed Mismatch",
+        "Runtime PDA seeds diverge from IDL-declared seeds, enabling account substitution.",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -226,6 +232,10 @@ fn classify_finding_rule(finding: &Finding) -> String {
         "SAT008".to_string()
     } else if finding.title.contains("Sysvar") {
         "SAT009".to_string()
+    } else if finding.title.contains("CEI Violation") {
+        "SAT014".to_string()
+    } else if finding.title.contains("PDA Seed") || finding.title.contains("Seed Mismatch") {
+        "SAT015".to_string()
     } else if finding.title.contains("Serialization Mismatch") || finding.title.contains("Mismatch") {
         "SAT010".to_string()
     } else if finding.title.contains("Tx-Report") || finding.title.contains("Transaction") {

@@ -5,6 +5,7 @@ mod analyzer;
 mod cpi;
 mod fuzzer;
 mod idl;
+mod pda;
 mod render;
 mod reporter;
 mod sarif;
@@ -14,6 +15,7 @@ mod token2022;
 mod tx_report;
 mod types;
 mod ui;
+mod verify;
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +48,11 @@ enum Commands {
     Report {
         #[command(subcommand)]
         action: ReportAction,
+    },
+    /// Generate Kani formal-verification scaffolding
+    Verify {
+        #[command(subcommand)]
+        action: VerifyAction,
     },
     /// Print version information
     Version,
@@ -88,6 +95,12 @@ enum ReportAction {
     New,
 }
 
+#[derive(Subcommand)]
+enum VerifyAction {
+    /// Initialize a formal-verification crate in the workspace
+    Init,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -104,6 +117,9 @@ fn main() -> Result<()> {
         },
         Commands::Report { action } => match action {
             ReportAction::New => reporter::new_finding(),
+        },
+        Commands::Verify { action } => match action {
+            VerifyAction::Init => verify::init(),
         },
         Commands::Version => {
             ui::print_banner();
