@@ -1,0 +1,73 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench/programs/anchor-examples/examples/tutorial/basic-4/programs/basic-4/src
+  --- Scanning 1 source file(s)...
+
+┌
+├─ Accounts Structs
+  --- Found 2 Accounts struct(s) in 1 file(s):
+
+  - Initialize  bench/programs/anchor-examples/examples/tutorial/basic-4/programs/basic-4/src\lib.rs:36
+      - counter: Account<info, Counter> [init]
+      - authority: Signer<info> [mut]
+      - system_program: Program<info, System>
+
+  - Increment  bench/programs/anchor-examples/examples/tutorial/basic-4/programs/basic-4/src\lib.rs:51
+      - counter: Account<info, Counter> [mut]
+      - authority: Signer<info>
+
+
+┌
+├─ Instruction Handlers
+  --- Found 2 instruction(s):
+  - initialize  [0xafaf6d1f0d989bed]  bench/programs/anchor-examples/examples/tutorial/basic-4/programs/basic-4/src\lib.rs:10
+  - increment  [0x0b12680968ae3b21]  bench/programs/anchor-examples/examples/tutorial/basic-4/programs/basic-4/src\lib.rs:23
+
+
+┌
+├─ Findings
+#1 [HIGH] Missing `has_one` Constraint: signer `authority` in `Increment` is not linked to any Account field
+  at bench/programs/anchor-examples/examples/tutorial/basic-4/programs/basic-4/src\lib.rs:58 (Increment::authority)
+  confidence: Medium
+
+  The `Signer<'info>` field `authority` in `Increment` appears to be an authority (based on its name), but no `Account<'info, T>` field in this struct has `has_one = authority` to verify that the stored authority matches the signer. A program that accepts a signer without linking it to the stored authority via `has_one` cannot guarantee that the caller owns the account they are modifying. This enables privilege escalation and account substitution attacks.
+
+  Suggestion:
+  Add `#[account(mut, has_one = authority)]` to the Account field that stores the authority pubkey (likely `counter`). Or add `#[account(signer)]` if the field is meant to be a standalone signer without a stored authority.
+
+  Manual verification:
+  - Locate the stored authority field in the mutable account data.
+  - Check whether the handler manually compares it with the signer key.
+  - Try pairing a valid signer with another user's state account.
+
+#2 [HIGH] Unsafe Arithmetic: `+=` in `increment` — use checked_*() instead
+  at bench/programs/anchor-examples/examples/tutorial/basic-4/programs/basic-4/src\lib.rs:30
+  confidence: Medium
+
+  The expression `ctx.accounts.counter.count` uses `+=` on a field in `increment`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_sub()`, `checked_add()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_sub(amount).ok_or(Error::Underflow)?` or `.checked_add(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#3 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 3 findings: [HIGH] 2 HIGH | [INFO] 1 INFO
+

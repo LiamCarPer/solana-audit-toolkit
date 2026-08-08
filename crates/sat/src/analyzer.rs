@@ -43,6 +43,7 @@ pub struct AccountField {
     pub is_account_info: bool,
     pub is_unchecked_account: bool,
     pub is_signer_type: bool,
+    pub has_check_comment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +170,21 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                 let is_unchecked_account = ty_name.contains("UncheckedAccount");
                 let is_signer_type = ty_name.starts_with("Signer");
 
+                // The Anchor-ecosystem `/// CHECK:` doc-comment convention marks an
+                // account as deliberately left unconstrained (manual validation is
+                // documented elsewhere). Used to keep Missing Signer/Owner findings
+                // honest about severity instead of flagging reviewed accounts as High.
+                let has_check_comment = field.attrs.iter().any(|attr| {
+                    attr.path().is_ident("doc")
+                        && attr.meta.require_name_value().is_ok_and(|nv| {
+                            matches!(
+                                &nv.value,
+                                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. })
+                                    if s.value().contains("CHECK")
+                            )
+                        })
+                });
+
                 fields.push(AccountField {
                     name: field_name,
                     ty_name,
@@ -184,6 +200,7 @@ fn extract_accounts_structs(file: &syn::File, file_path: &Path) -> Vec<AccountsS
                     is_account_info,
                     is_unchecked_account,
                     is_signer_type,
+                    has_check_comment,
                 });
             }
 
@@ -381,23 +398,35 @@ fn check_missing_signer(accounts: &[AccountsStruct]) -> Vec<Finding> {
                 || name_lower.ends_with("_owner");
 
             if looks_like_authority && !field.has_signer && !field.is_signer_type && !field.has_seeds {
-                let (severity, title_suffix) = if field.has_mut {
+                let (severity, title_suffix) = if field.has_check_comment {
+                    (Severity::Low, "authority field is unconstrained but carries a `CHECK:` doc comment")
+                } else if field.has_mut {
                     (Severity::High, "authority field is mutable but not marked as signer")
                 } else {
                     (Severity::Medium, "authority field is missing signer constraint")
                 };
 
+                let mut description = format!(
+                    "The field `{}` in `{}` appears to represent an authority but is not constrained \
+                     with `#[account(signer)]` and is not of type `Signer<'info>`. Without signer \
+                     verification, this account's signature is not enforced, allowing unauthorized \
+                     callers to supply arbitrary public keys for this account.",
+                    field.name, accts.name
+                );
+                if field.has_check_comment {
+                    description.push_str(
+                        " This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention \
+                         for a deliberately reviewed account. Confirm the documented manual validation \
+                         (Validate impl, handler key-equality guard, or fixed address check) actually \
+                         exists before treating this as exploitable.",
+                    );
+                }
+
                 findings.push(Finding {
                     id: String::new(),
                     title: format!("Missing Signer: `{}::{}` {}", accts.name, field.name, title_suffix),
                     severity,
-                    description: format!(
-                        "The field `{}` in `{}` appears to represent an authority but is not constrained \
-                         with `#[account(signer)]` and is not of type `Signer<'info>`. Without signer \
-                         verification, this account's signature is not enforced, allowing unauthorized \
-                         callers to supply arbitrary public keys for this account.",
-                        field.name, accts.name
-                    ),
+                    description,
                     location: Some(format!("{}:{} ({}::{})", accts.file.display(), field.line, accts.name, field.name)),
                     suggestion: Some(format!(
                         "Add `#[account(signer)]` to the `{}` field or change its type to `Signer<'info>`.",
@@ -432,6 +461,25 @@ fn check_missing_owner(accounts: &[AccountsStruct]) -> Vec<Finding> {
             }
 
             if !field.has_owner {
+                let severity = if field.has_check_comment { Severity::Low } else { Severity::High };
+
+                let mut description = format!(
+                    "The field `{}` in `{}` is typed as `{}` without an explicit `#[account(owner = ...)]` \
+                     constraint. Any account owned by any program can be passed here, enabling account \
+                     substitution attacks where a malicious actor provides an account owned by a program \
+                     they control.",
+                    field.name,
+                    accts.name,
+                    if field.is_unchecked_account { "UncheckedAccount" } else { "AccountInfo" }
+                );
+                if field.has_check_comment {
+                    description.push_str(
+                        " This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention \
+                         for a deliberately reviewed account. Confirm the documented manual validation \
+                         actually exists before treating this as exploitable.",
+                    );
+                }
+
                 findings.push(Finding {
                     id: String::new(),
                     title: format!(
@@ -440,16 +488,8 @@ fn check_missing_owner(accounts: &[AccountsStruct]) -> Vec<Finding> {
                         field.name,
                         if field.is_unchecked_account { "UncheckedAccount" } else { "AccountInfo" }
                     ),
-                    severity: Severity::High,
-                    description: format!(
-                        "The field `{}` in `{}` is typed as `{}` without an explicit `#[account(owner = ...)]` \
-                         constraint. Any account owned by any program can be passed here, enabling account \
-                         substitution attacks where a malicious actor provides an account owned by a program \
-                         they control.",
-                        field.name,
-                        accts.name,
-                        if field.is_unchecked_account { "UncheckedAccount" } else { "AccountInfo" }
-                    ),
+                    severity,
+                    description,
                     location: Some(format!("{}:{} ({}::{})", accts.file.display(), field.line, accts.name, field.name)),
                     suggestion: Some(format!(
                         "Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected \

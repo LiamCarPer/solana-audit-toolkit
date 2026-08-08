@@ -1,0 +1,59 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench/programs/anchor-examples/examples/tutorial/basic-2/programs/basic-2/src
+  --- Scanning 1 source file(s)...
+
+┌
+├─ Accounts Structs
+  --- Found 2 Accounts struct(s) in 1 file(s):
+
+  - Create  bench/programs/anchor-examples/examples/tutorial/basic-2/programs/basic-2/src\lib.rs:24
+      - counter: Account<info, Counter> [init]
+      - user: Signer<info> [mut]
+      - system_program: Program<info, System>
+
+  - Increment  bench/programs/anchor-examples/examples/tutorial/basic-2/programs/basic-2/src\lib.rs:33
+      - counter: Account<info, Counter> [mut]
+      - authority: Signer<info>
+
+
+┌
+├─ Instruction Handlers
+  --- Found 2 instruction(s):
+  - create  [0x181ec828051c0777]  bench/programs/anchor-examples/examples/tutorial/basic-2/programs/basic-2/src\lib.rs:9
+  - increment  [0x0b12680968ae3b21]  bench/programs/anchor-examples/examples/tutorial/basic-2/programs/basic-2/src\lib.rs:16
+
+
+┌
+├─ Findings
+#1 [HIGH] Unsafe Arithmetic: `+=` in `increment` — use checked_*() instead
+  at bench/programs/anchor-examples/examples/tutorial/basic-2/programs/basic-2/src\lib.rs:18
+  confidence: Medium
+
+  The expression `counter.count` uses `+=` on a field in `increment`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_sub()`, `checked_add()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_sub(amount).ok_or(Error::Underflow)?` or `.checked_add(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#2 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 2 findings: [HIGH] 1 HIGH | [INFO] 1 INFO
+

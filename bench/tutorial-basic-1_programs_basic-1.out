@@ -1,0 +1,44 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench/programs/anchor-examples/examples/tutorial/basic-1/programs/basic-1/src
+  --- Scanning 1 source file(s)...
+
+┌
+├─ Accounts Structs
+  --- Found 2 Accounts struct(s) in 1 file(s):
+
+  - Initialize  bench/programs/anchor-examples/examples/tutorial/basic-1/programs/basic-1/src\lib.rs:23
+      - my_account: Account<info, MyAccount> [init]
+      - user: Signer<info> [mut]
+      - system_program: Program<info, System>
+
+  - Update  bench/programs/anchor-examples/examples/tutorial/basic-1/programs/basic-1/src\lib.rs:32
+      - my_account: Account<info, MyAccount> [mut]
+
+
+┌
+├─ Instruction Handlers
+  --- Found 2 instruction(s):
+  - initialize  [0xafaf6d1f0d989bed]  bench/programs/anchor-examples/examples/tutorial/basic-1/programs/basic-1/src\lib.rs:9
+  - update  [0xdbc858b09e3ffd7f]  bench/programs/anchor-examples/examples/tutorial/basic-1/programs/basic-1/src\lib.rs:15
+
+
+┌
+├─ Findings
+#1 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 1 finding: [INFO] 1 INFO
+

@@ -1,0 +1,99 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench/programs/cashio-vuln/programs/brrr/src
+  --- Scanning 7 source file(s)...
+
+┌
+├─ Accounts Structs
+  --- Found 4 Accounts struct(s) in 7 file(s):
+
+  - SaberSwapAccounts  bench/programs/cashio-vuln/programs/brrr/src\lib.rs:56
+      - arrow: Box<Account<info, Arrow>>
+      - saber_swap: Box<Account<info, SwapInfo>>
+      - pool_mint: Box<Account<info, Mint>>
+      - reserve_a: Box<Account<info, TokenAccount>>
+      - reserve_b: Box<Account<info, TokenAccount>>
+
+  - PrintCash  bench/programs/cashio-vuln/programs/brrr/src\lib.rs:71
+      - common: BrrrCommon<info>
+      - depositor: Signer<info> [mut]
+      - depositor_source: Box<Account<info, TokenAccount>> [mut]
+      - mint_destination: Box<Account<info, TokenAccount>> [mut]
+      - issue_authority: UncheckedAccount<info> [UncheckedAccount]
+
+  - BrrrCommon  bench/programs/cashio-vuln/programs/brrr/src\lib.rs:93
+      - bank: Box<Account<info, Bank>>
+      - collateral: Box<Account<info, Collateral>>
+      - crate_token: Box<Account<info, crate_token::CrateToken>>
+      - crate_mint: Box<Account<info, Mint>> [mut]
+      - crate_collateral_tokens: Box<Account<info, TokenAccount>> [mut]
+      - saber_swap: SaberSwapAccounts<info>
+      - token_program: Program<info, Token>
+      - crate_token_program: Program<info, crate_token::program::CrateToken>
+
+  - BurnCash  bench/programs/cashio-vuln/programs/brrr/src\lib.rs:123
+      - common: BrrrCommon<info>
+      - burner: Signer<info> [mut]
+      - burned_cash_source: Box<Account<info, TokenAccount>> [mut]
+      - withdraw_destination: Box<Account<info, TokenAccount>> [mut]
+      - author_fee_destination: Account<info, TokenAccount> [mut]
+      - protocol_fee_destination: Account<info, TokenAccount> [mut]
+      - withdraw_authority: UncheckedAccount<info> [UncheckedAccount]
+
+
+┌
+├─ Instruction Handlers
+  --- Found 2 instruction(s):
+  - print_cash  [0x2efcde74f717f003]  bench/programs/cashio-vuln/programs/brrr/src\lib.rs:39
+  - burn_cash  [0x8a20bc67cbaef1fc]  bench/programs/cashio-vuln/programs/brrr/src\lib.rs:49
+
+
+┌
+├─ Findings
+#1 [LOW] Missing Signer: `PrintCash::issue_authority` authority field is unconstrained but carries a `CHECK:` doc comment
+  at bench/programs/cashio-vuln/programs/brrr/src\lib.rs:89 (PrintCash::issue_authority)
+  confidence: High
+  affected: PrintCash::issue_authority
+
+  The field `issue_authority` in `PrintCash` appears to represent an authority but is not constrained with `#[account(signer)]` and is not of type `Signer<'info>`. Without signer verification, this account's signature is not enforced, allowing unauthorized callers to supply arbitrary public keys for this account. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation (Validate impl, handler key-equality guard, or fixed address check) actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(signer)]` to the `issue_authority` field or change its type to `Signer<'info>`.
+
+  Manual verification:
+  - Confirm the account authorizes privileged state changes or fund movement.
+  - Check whether the handler has an equivalent manual `is_signer` or key equality guard.
+  - Attempt a transaction with this account supplied as a non-signer.
+
+#2 [LOW] Missing Signer: `BurnCash::withdraw_authority` authority field is unconstrained but carries a `CHECK:` doc comment
+  at bench/programs/cashio-vuln/programs/brrr/src\lib.rs:149 (BurnCash::withdraw_authority)
+  confidence: High
+  affected: BurnCash::withdraw_authority
+
+  The field `withdraw_authority` in `BurnCash` appears to represent an authority but is not constrained with `#[account(signer)]` and is not of type `Signer<'info>`. Without signer verification, this account's signature is not enforced, allowing unauthorized callers to supply arbitrary public keys for this account. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation (Validate impl, handler key-equality guard, or fixed address check) actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(signer)]` to the `withdraw_authority` field or change its type to `Signer<'info>`.
+
+  Manual verification:
+  - Confirm the account authorizes privileged state changes or fund movement.
+  - Check whether the handler has an equivalent manual `is_signer` or key equality guard.
+  - Attempt a transaction with this account supplied as a non-signer.
+
+#3 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 3 findings: [LOW] 2 LOW | [INFO] 1 INFO
+

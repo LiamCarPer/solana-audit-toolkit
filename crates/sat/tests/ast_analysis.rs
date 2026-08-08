@@ -357,6 +357,32 @@ fn test_fixture_missing_auth_finds_issues() {
 }
 
 #[test]
+fn test_check_documented_authorities_downgraded() {
+    use std::fs;
+    let path = "tests/fixtures_ast/vulnerable/check_documented.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    assert_eq!(accounts.len(), 2, "should find 2 Accounts structs");
+
+    let signer_findings: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Signer")).collect();
+    assert_eq!(signer_findings.len(), 3, "all three authority fields should be flagged");
+
+    let issue = signer_findings.iter().find(|f| f.title.contains("issue_authority")).unwrap();
+    assert_eq!(issue.severity, Severity::Low, "CHECK-documented authority should be downgraded to Low");
+    assert!(
+        issue.description.contains("CHECK:"),
+        "Low findings should explain the CHECK: convention in the description"
+    );
+
+    let mint = signer_findings.iter().find(|f| f.title.contains("mint_authority")).unwrap();
+    assert_eq!(mint.severity, Severity::Low, "CHECK-documented authority should be downgraded to Low");
+
+    let withdraw = signer_findings.iter().find(|f| f.title.contains("withdraw_authority")).unwrap();
+    assert_eq!(withdraw.severity, Severity::Medium, "undocumented authority should keep the default severity");
+}
+
+#[test]
 fn test_fixture_missing_owner_finds_issues() {
     use std::fs;
     let path = "tests/fixtures_ast/vulnerable/missing_owner.rs";

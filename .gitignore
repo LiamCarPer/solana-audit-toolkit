@@ -3,3 +3,5 @@
 *.sarif
 rust_out
 .notes/
+# cloned benchmark targets (never commit third-party repos)
+/bench/programs/

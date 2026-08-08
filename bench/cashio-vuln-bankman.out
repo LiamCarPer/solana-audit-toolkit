@@ -1,0 +1,118 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench/programs/cashio-vuln/programs/bankman/src
+  --- Scanning 4 source file(s)...
+
+┌
+├─ Accounts Structs
+  --- Found 5 Accounts struct(s) in 4 file(s):
+
+  - NewBank  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:160
+      - bank: Account<info, Bank> [init]
+      - crate_mint: Account<info, Mint>
+      - crate_token: SystemAccount<info> [mut]
+      - brrr_issue_authority: UncheckedAccount<info> [UncheckedAccount]
+      - burn_withdraw_authority: UncheckedAccount<info> [UncheckedAccount]
+      - payer: Signer<info> [mut]
+      - admin: UncheckedAccount<info> [UncheckedAccount]
+      - system_program: Program<info, System>
+      - crate_token_program: Program<info, crate_token::program::CrateToken>
+
+  - AuthorizeCollateral  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:205
+      - bank: Account<info, Bank>
+      - collateral: Account<info, Collateral> [init]
+      - mint: Box<Account<info, Mint>>
+      - curator: Signer<info>
+      - payer: Signer<info> [mut]
+      - system_program: Program<info, System>
+
+  - SetCollateralHardCap  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:238
+      - bank: Account<info, Bank>
+      - collateral: Account<info, Collateral> [mut]
+      - curator: Signer<info>
+
+  - SetCurator  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:250
+      - bank: Account<info, Bank> [mut]
+      - bankman: Signer<info>
+      - next_curator: UncheckedAccount<info> [UncheckedAccount]
+
+  - SetBankman  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:263
+      - bank: Account<info, Bank> [mut]
+      - bankman: Signer<info>
+      - next_bankman: UncheckedAccount<info> [UncheckedAccount]
+
+
+┌
+├─ Instruction Handlers
+  --- Found 5 instruction(s):
+  - new_bank  [0x92fb3f01202dbe43]  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:28
+  - authorize_collateral  [0xf754d1037375808f]  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:86
+  - set_collateral_hard_cap  [0x4641e3bd232afc98]  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:106
+  - set_curator  [0x737fc4dbebc660fd]  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:124
+  - set_bankman  [0xf389a1e5432d71d2]  bench/programs/cashio-vuln/programs/bankman/src\lib.rs:142
+
+
+┌
+├─ Findings
+#1 [LOW] Missing Signer: `NewBank::brrr_issue_authority` authority field is unconstrained but carries a `CHECK:` doc comment
+  at bench/programs/cashio-vuln/programs/bankman/src\lib.rs:182 (NewBank::brrr_issue_authority)
+  confidence: High
+  affected: NewBank::brrr_issue_authority
+
+  The field `brrr_issue_authority` in `NewBank` appears to represent an authority but is not constrained with `#[account(signer)]` and is not of type `Signer<'info>`. Without signer verification, this account's signature is not enforced, allowing unauthorized callers to supply arbitrary public keys for this account. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation (Validate impl, handler key-equality guard, or fixed address check) actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(signer)]` to the `brrr_issue_authority` field or change its type to `Signer<'info>`.
+
+  Manual verification:
+  - Confirm the account authorizes privileged state changes or fund movement.
+  - Check whether the handler has an equivalent manual `is_signer` or key equality guard.
+  - Attempt a transaction with this account supplied as a non-signer.
+
+#2 [LOW] Missing Signer: `NewBank::burn_withdraw_authority` authority field is unconstrained but carries a `CHECK:` doc comment
+  at bench/programs/cashio-vuln/programs/bankman/src\lib.rs:186 (NewBank::burn_withdraw_authority)
+  confidence: High
+  affected: NewBank::burn_withdraw_authority
+
+  The field `burn_withdraw_authority` in `NewBank` appears to represent an authority but is not constrained with `#[account(signer)]` and is not of type `Signer<'info>`. Without signer verification, this account's signature is not enforced, allowing unauthorized callers to supply arbitrary public keys for this account. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation (Validate impl, handler key-equality guard, or fixed address check) actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(signer)]` to the `burn_withdraw_authority` field or change its type to `Signer<'info>`.
+
+  Manual verification:
+  - Confirm the account authorizes privileged state changes or fund movement.
+  - Check whether the handler has an equivalent manual `is_signer` or key equality guard.
+  - Attempt a transaction with this account supplied as a non-signer.
+
+#3 [LOW] Missing Signer: `NewBank::admin` authority field is unconstrained but carries a `CHECK:` doc comment
+  at bench/programs/cashio-vuln/programs/bankman/src\lib.rs:194 (NewBank::admin)
+  confidence: High
+  affected: NewBank::admin
+
+  The field `admin` in `NewBank` appears to represent an authority but is not constrained with `#[account(signer)]` and is not of type `Signer<'info>`. Without signer verification, this account's signature is not enforced, allowing unauthorized callers to supply arbitrary public keys for this account. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation (Validate impl, handler key-equality guard, or fixed address check) actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(signer)]` to the `admin` field or change its type to `Signer<'info>`.
+
+  Manual verification:
+  - Confirm the account authorizes privileged state changes or fund movement.
+  - Check whether the handler has an equivalent manual `is_signer` or key equality guard.
+  - Attempt a transaction with this account supplied as a non-signer.
+
+#4 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 4 findings: [LOW] 3 LOW | [INFO] 1 INFO
+
