@@ -1,11 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
+use crate::fuzzer_layout;
+use crate::fuzzer_seeds;
 use crate::idl;
 use crate::ui;
 
@@ -19,6 +21,9 @@ struct FuzzerConfig {
     crate_name: String,
     program_id: String,
     instructions: Vec<FuzzerInstructionConfig>,
+    /// Raw IDL account type names (e.g. `VaultState`); used to pick the
+    /// generated `accounts::build_*` factory for each seeded account.
+    account_types: Vec<String>,
     has_vault: bool,
     has_token: bool,
     has_state_init_flag: bool,
@@ -36,6 +41,9 @@ struct FuzzerAccountConfig {
     name: String,
     is_mut: bool,
     is_signer: bool,
+    /// True when the IDL declares a `pda` (seeds) block for this account on
+    /// this instruction; drives `pda_<ix>_<acct>` address resolution.
+    pda: bool,
 }
 
 /// A single instruction argument lifted from the IDL.
@@ -104,15 +112,32 @@ pub fn init() -> Result<()> {
     ui::print_banner();
     ui::print_section_header("Fuzzer Initialization");
 
-    let config = match idl::find_idl_in_workspace().ok().and_then(|p| idl::parse_idl(&p).ok()) {
-        Some(idl) => config_from_idl(idl),
-        None => {
-            ui::print_warning("No Anchor IDL found. Generating fuzzer with default configuration...");
-            default_config()
-        }
-    };
+    let (config, layout, pda_setup, signer_info) =
+        match idl::find_idl_in_workspace().ok().and_then(|p| idl::parse_idl(&p).ok()) {
+            Some(idl) => {
+                let layout = fuzzer_layout::render_account_factories(&idl);
+                let pda_setup = fuzzer_seeds::render_pda_setup(&idl);
+                let signer_info = fuzzer_seeds::render_signer_info(&idl);
+                (config_from_idl(idl), layout, pda_setup, signer_info)
+            }
+            None => {
+                ui::print_warning("No Anchor IDL found. Generating fuzzer with default configuration...");
+                let empty_idl = idl::IdlJson {
+                    version: "0.1.0".to_string(),
+                    name: "program".to_string(),
+                    instructions: vec![],
+                    accounts: vec![],
+                    types: vec![],
+                    metadata: None,
+                };
+                let layout = fuzzer_layout::render_account_factories(&empty_idl);
+                let pda_setup = fuzzer_seeds::render_pda_setup(&empty_idl);
+                let signer_info = fuzzer_seeds::render_signer_info(&empty_idl);
+                (default_config(), layout, pda_setup, signer_info)
+            }
+        };
 
-    generate_fuzzer(&config)?;
+    generate_fuzzer(&config, &layout, &pda_setup, &signer_info)?;
     update_workspace_cargo()?;
 
     ui::print_success("Fuzzer crate generated successfully.");
@@ -144,6 +169,7 @@ fn config_from_idl(idl: idl::IdlJson) -> FuzzerConfig {
                     name: account.name.clone(),
                     is_mut: account.is_mut,
                     is_signer: account.is_signer,
+                    pda: account.pda.is_some(),
                 })
                 .collect(),
             args: ix
@@ -172,6 +198,7 @@ fn config_from_idl(idl: idl::IdlJson) -> FuzzerConfig {
         crate_name,
         program_id,
         instructions,
+        account_types: idl.accounts.iter().map(|account| account.name.clone()).collect(),
         has_vault,
         has_token,
         has_state_init_flag,
@@ -188,29 +215,35 @@ fn default_config() -> FuzzerConfig {
             FuzzerInstructionConfig {
                 name: "initialize".to_string(),
                 accounts: vec![
-                    FuzzerAccountConfig { name: "state".to_string(), is_mut: true, is_signer: false },
-                    FuzzerAccountConfig { name: "authority".to_string(), is_mut: true, is_signer: true },
-                    FuzzerAccountConfig { name: "system_program".to_string(), is_mut: false, is_signer: false },
+                    FuzzerAccountConfig { name: "state".to_string(), is_mut: true, is_signer: false, pda: false },
+                    FuzzerAccountConfig { name: "authority".to_string(), is_mut: true, is_signer: true, pda: false },
+                    FuzzerAccountConfig {
+                        name: "system_program".to_string(),
+                        is_mut: false,
+                        is_signer: false,
+                        pda: false,
+                    },
                 ],
                 args: vec![],
             },
             FuzzerInstructionConfig {
                 name: "update".to_string(),
                 accounts: vec![
-                    FuzzerAccountConfig { name: "state".to_string(), is_mut: true, is_signer: false },
-                    FuzzerAccountConfig { name: "authority".to_string(), is_mut: false, is_signer: true },
+                    FuzzerAccountConfig { name: "state".to_string(), is_mut: true, is_signer: false, pda: false },
+                    FuzzerAccountConfig { name: "authority".to_string(), is_mut: false, is_signer: true, pda: false },
                 ],
                 args: vec![],
             },
             FuzzerInstructionConfig {
                 name: "close".to_string(),
                 accounts: vec![
-                    FuzzerAccountConfig { name: "state".to_string(), is_mut: true, is_signer: false },
-                    FuzzerAccountConfig { name: "authority".to_string(), is_mut: true, is_signer: true },
+                    FuzzerAccountConfig { name: "state".to_string(), is_mut: true, is_signer: false, pda: false },
+                    FuzzerAccountConfig { name: "authority".to_string(), is_mut: true, is_signer: true, pda: false },
                 ],
                 args: vec![],
             },
         ],
+        account_types: vec![],
         has_vault: false,
         has_token: false,
         has_state_init_flag: false,
@@ -275,33 +308,96 @@ fn unsupported_arg_names(ix: &FuzzerInstructionConfig) -> String {
         .join(", ")
 }
 
-fn generate_fuzzer(config: &FuzzerConfig) -> Result<()> {
+fn generate_fuzzer(config: &FuzzerConfig, layout: &str, pda_setup: &str, signer_info: &str) -> Result<()> {
     let dir = PathBuf::from(FUZZER_DIR);
     fs::create_dir_all(dir.join("src"))?;
     fs::create_dir_all(dir.join("fuzz_targets"))?;
 
-    fs::write(dir.join("Cargo.toml"), render_cargo_toml(config))?;
-    fs::write(dir.join("src").join("lib.rs"), render_lib_rs(config))?;
+    let program_toml = PathBuf::from("programs").join(&config.program_lib_name).join("Cargo.toml");
+    fs::write(dir.join("Cargo.toml"), render_cargo_toml(config, &program_toml))?;
+    fs::write(dir.join("src").join("lib.rs"), render_lib_rs(config, layout, pda_setup, signer_info))?;
     fs::write(dir.join("fuzz_targets").join("instruction_fuzz.rs"), render_fuzz_target(config))?;
+    fs::write(dir.join("README.md"), render_readme(config))?;
     Ok(())
 }
 
-fn render_cargo_toml(config: &FuzzerConfig) -> String {
+/// Dependency keys whose versions are mirrored from the target program's
+/// Cargo.toml into the generated fuzzer crate.
+const MIRRORED_DEPENDENCIES: &[&str] =
+    &["anchor-lang", "solana-program", "solana-sdk", "solana-program-test", "spl-token", "spl-token-2022"];
+
+/// Reads the target program's Cargo.toml (`programs/<lib_name>/Cargo.toml`)
+/// and extracts version strings for [`MIRRORED_DEPENDENCIES`], checking both
+/// `[dependencies]` and `[workspace.dependencies]` sections. Plain string
+/// versions (`"0.30.1"`) and `{ version = "..." }` tables are supported.
+/// A missing/unparseable file yields an empty map; callers fall back to the
+/// default versions.
+fn program_dependency_versions(path: &Path) -> HashMap<String, String> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return HashMap::new(),
+    };
+    let table: toml::Value = match content.parse() {
+        Ok(table) => table,
+        Err(_) => return HashMap::new(),
+    };
+
+    let mut versions = HashMap::new();
+    let sections = [
+        table.get("dependencies").and_then(toml::Value::as_table),
+        table.get("workspace").and_then(|ws| ws.get("dependencies")).and_then(toml::Value::as_table),
+    ];
+    for deps in sections.into_iter().flatten() {
+        for key in MIRRORED_DEPENDENCIES {
+            if versions.contains_key(*key) {
+                continue;
+            }
+            let version = deps.get(*key).and_then(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| value.get("version").and_then(toml::Value::as_str).map(str::to_string))
+            });
+            if let Some(version) = version {
+                versions.insert((*key).to_string(), version);
+            }
+        }
+    }
+    versions
+}
+
+fn render_cargo_toml(config: &FuzzerConfig, program_toml: &Path) -> String {
+    let versions = program_dependency_versions(program_toml);
+    let warn = if MIRRORED_DEPENDENCIES.iter().all(|key| versions.contains_key(*key)) {
+        String::new()
+    } else {
+        format!(
+            "# WARN: could not read {} — using default versions; mirror the target program's Cargo.toml versions if the build fails\n",
+            program_toml.display()
+        )
+    };
+    let anchor_lang = versions.get("anchor-lang").map(String::as_str).unwrap_or("0.29");
+    let solana_program = versions.get("solana-program").map(String::as_str).unwrap_or("4");
+    let solana_program_test = versions.get("solana-program-test").map(String::as_str).unwrap_or("4");
+    let solana_sdk = versions.get("solana-sdk").map(String::as_str).unwrap_or("4");
+    let spl_token = versions.get("spl-token").map(String::as_str).unwrap_or("7");
+    let spl_token_2022 = versions.get("spl-token-2022").map(String::as_str).unwrap_or("7");
+
     format!(
         r#"[package]
-name = "fuzzer-{}"
+name = "fuzzer-{package_name}"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
-{} = {{ path = "../programs/{}", features = ["no-entrypoint"] }}
-anchor-lang = "0.29"
-solana-program = "4"
-solana-program-test = "4"
-solana-sdk = "4"
-spl-token = "7"
-spl-token-2022 = "7"
+{warn}{lib} = {{ path = "../programs/{lib}", features = ["no-entrypoint"] }}
+anchor-lang = "{anchor_lang}"
+solana-program = "{solana_program}"
+solana-program-test = "{solana_program_test}"
+solana-sdk = "{solana_sdk}"
+spl-token = "{spl_token}"
+spl-token-2022 = "{spl_token_2022}"
 arbitrary = {{ version = "1", features = ["derive"] }}
 borsh = "1"
 rand = "0.8"
@@ -314,17 +410,28 @@ path = "fuzz_targets/instruction_fuzz.rs"
 test = false
 doc = false
 "#,
-        sanitize_package_name(&config.program_name),
-        config.program_lib_name,
-        config.program_lib_name
+        package_name = sanitize_package_name(&config.program_name),
+        lib = config.program_lib_name,
+        warn = warn,
+        anchor_lang = anchor_lang,
+        solana_program = solana_program,
+        solana_program_test = solana_program_test,
+        solana_sdk = solana_sdk,
+        spl_token = spl_token,
+        spl_token_2022 = spl_token_2022,
     )
 }
 
-fn render_lib_rs(config: &FuzzerConfig) -> String {
+fn render_lib_rs(config: &FuzzerConfig, layout: &str, pda_setup: &str, signer_info: &str) -> String {
     let invariants = render_invariants(config);
     let checks = render_invariant_checks(config);
     let date = chrono::Local::now().format("%Y-%m-%d");
     let ix_list = config.instruction_names().join(", ");
+    let token_account_import = if has_seeded_token_accounts(config) {
+        "use spl_token::state::{Account as SplTokenAccount, AccountState};\n"
+    } else {
+        ""
+    };
 
     format!(
         r#"// Auto-generated by `sat fuzz init` — {date}
@@ -334,6 +441,7 @@ fn render_lib_rs(config: &FuzzerConfig) -> String {
 use std::str::FromStr;
 
 use arbitrary::Arbitrary;
+use solana_program::program_option::COption;
 use solana_program_test::{{processor, BanksClient, ProgramTest}};
 use solana_sdk::{{
     account::Account,
@@ -343,7 +451,13 @@ use solana_sdk::{{
     signer::keypair::Keypair,
     transaction::Transaction,
 }};
+use spl_token::state::Mint as SplTokenMint;
+{token_account_import}
+{layout}
 
+{pda_setup}
+
+{signer_info}
 #[derive(Arbitrary, Debug, Clone)]
 pub enum FuzzInstruction {{
 {enum_variants}}}
@@ -355,13 +469,20 @@ impl FuzzInstruction {{
         }}
     }}
 
-    pub fn to_instruction(&self, payer: &Pubkey) -> Result<Instruction, borsh::io::Error> {{
+    /// Builds the instruction: 8-byte Anchor discriminator + borsh args, with
+    /// account metas resolved by `account_metas` (signer ordinals: 0 = payer).
+    pub fn to_instruction(&self, payer: &Pubkey, signer_pubkeys: &[Pubkey]) -> Result<Instruction, borsh::io::Error> {{
         match self {{
 {to_ix_match}
         }}
     }}
 
-    fn account_metas(&self, payer: &Pubkey) -> Vec<AccountMeta> {{
+    /// Resolves each IDL account to a pubkey: signers → `signer_pubkeys[<ordinal>]`
+    /// (0 = payer), PDA accounts → their IDL-seeded `pda_<ix>_<acct>` address,
+    /// everything else → `account_address` (well-known canonicals, else the
+    /// deterministic sat-fuzz PDA).
+    #[allow(unused_variables)] // `payer`/`signer_pubkeys` unused when every account is a signer or well-known
+    fn account_metas(&self, payer: &Pubkey, signer_pubkeys: &[Pubkey]) -> Vec<AccountMeta> {{
         match self {{
 {account_meta_match}
         }}
@@ -390,13 +511,27 @@ pub fn well_known_account(name: &str) -> Option<Pubkey> {{
     }}
 }}
 
-pub fn set_up_program_test() -> ProgramTest {{
+pub fn set_up_program_test() -> (ProgramTest, Keypair, Vec<Keypair>) {{
     let mut program_test = ProgramTest::new("{lib_name}", program_id(), processor!({lib_name}::entry));
-    seed_fuzz_accounts(&mut program_test);
-    program_test
+    let payer = Keypair::new();
+    program_test.add_account(
+        payer.pubkey(),
+        Account {{ lamports: 1_000_000_000_000, data: vec![], owner: solana_program::system_program::ID, executable: false, rent_epoch: 0 }},
+    );
+    let keypairs: Vec<Keypair> = (0..MAX_SIGNERS.saturating_sub(1)).map(|_| Keypair::new()).collect();
+    for keypair in &keypairs {{
+        program_test.add_account(
+            keypair.pubkey(),
+            Account {{ lamports: 1_000_000_000_000, data: vec![], owner: solana_program::system_program::ID, executable: false, rent_epoch: 0 }},
+        );
+    }}
+    let signer_pubkeys: Vec<Pubkey> =
+        std::iter::once(payer.pubkey()).chain(keypairs.iter().map(|k| k.pubkey())).collect();
+    seed_fuzz_accounts(&mut program_test, &payer.pubkey(), &signer_pubkeys);
+    (program_test, payer, keypairs)
 }}
 
-pub fn seed_fuzz_accounts(program_test: &mut ProgramTest) {{
+pub fn seed_fuzz_accounts(program_test: &mut ProgramTest, payer: &Pubkey, signer_pubkeys: &[Pubkey]) {{
 {seed_accounts}
 }}
 
@@ -433,6 +568,10 @@ pub fn check_invariants(
         date = date,
         prog = config.program_name,
         ix_list = ix_list,
+        token_account_import = token_account_import,
+        layout = layout,
+        pda_setup = pda_setup,
+        signer_info = signer_info,
         enum_variants = render_arbitrary_enum_variants(config),
         ix_name_match = render_ix_name_match(config),
         to_ix_match = render_to_instruction_match(config),
@@ -504,17 +643,17 @@ fn render_to_instruction_match(config: &FuzzerConfig) -> String {
             let bytes = discriminator.iter().map(|byte| byte.to_string()).collect::<Vec<_>>().join(", ");
             match variant_shape(ix) {
                 VariantShape::RawTuple => format!(
-                    "            FuzzInstruction::{name}(data) => {{\n                let mut payload = vec![{bytes}];\n                payload.extend(data.iter().copied());\n                Ok(Instruction::new_with_bytes(program_id(), &payload, self.account_metas(payer)))\n            }},\n"
+                    "            FuzzInstruction::{name}(data) => {{\n                let mut payload = vec![{bytes}];\n                payload.extend(data.iter().copied());\n                Ok(Instruction::new_with_bytes(program_id(), &payload, self.account_metas(payer, signer_pubkeys)))\n            }},\n"
                 ),
                 VariantShape::Typed(args) => {
                     let bindings = args.iter().map(|arg| arg.name.clone()).collect::<Vec<_>>().join(", ");
                     let serializers = args.iter().map(render_arg_serializer).collect::<String>();
                     format!(
-                        "            // Honest scaffolding: args are borsh-serialized field-by-field, matching Anchor's\n            // borsh encoding of instruction args for these primitives (String = u32 length + UTF-8).\n            FuzzInstruction::{name} {{ {bindings} }} => {{\n                let mut payload = vec![{bytes}];\n{serializers}                Ok(Instruction::new_with_bytes(program_id(), &payload, self.account_metas(payer)))\n            }},\n"
+                        "            // Honest scaffolding: args are borsh-serialized field-by-field, matching Anchor's\n            // borsh encoding of instruction args for these primitives (String = u32 length + UTF-8).\n            FuzzInstruction::{name} {{ {bindings} }} => {{\n                let mut payload = vec![{bytes}];\n{serializers}                Ok(Instruction::new_with_bytes(program_id(), &payload, self.account_metas(payer, signer_pubkeys)))\n            }},\n"
                     )
                 }
                 VariantShape::RawFallback => format!(
-                    "            FuzzInstruction::{name} {{ raw }} => {{\n                let mut payload = vec![{bytes}];\n                payload.extend(raw.iter().copied());\n                Ok(Instruction::new_with_bytes(program_id(), &payload, self.account_metas(payer)))\n            }},\n"
+                    "            FuzzInstruction::{name} {{ raw }} => {{\n                let mut payload = vec![{bytes}];\n                payload.extend(raw.iter().copied());\n                Ok(Instruction::new_with_bytes(program_id(), &payload, self.account_metas(payer, signer_pubkeys)))\n            }},\n"
                 ),
             }
         })
@@ -530,25 +669,34 @@ fn render_arg_serializer(arg: &FuzzerArgConfig) -> String {
     format!("                payload.extend(borsh::to_vec(&{})?);\n", arg.name)
 }
 
+/// Renders the `account_metas` match arms. Signer accounts resolve to
+/// `signer_pubkeys[<ordinal>]` (ordinal = position among the instruction's
+/// `is_signer` accounts, 0 = payer); PDA accounts resolve to their
+/// IDL-seeded address via the generated `pda_<ix>_<acct>` helpers (keyed by
+/// name so the address matches `seed_fuzz_accounts`); everything else goes
+/// through `account_address` (well-known canonicals, else the sat-fuzz PDA).
 fn render_account_meta_match(config: &FuzzerConfig) -> String {
+    let pda_by_name = pda_helper_names(config);
     config
         .instructions
         .iter()
         .map(|ix| {
-            let metas = ix
-                .accounts
-                .iter()
-                .map(|account| {
-                    let constructor = if account.is_mut { "AccountMeta::new" } else { "AccountMeta::new_readonly" };
-                    let pubkey_expr = if account.is_signer {
-                        "*payer".to_string()
-                    } else {
-                        format!("fuzz_account_pubkey(\"{}\")", account.name)
-                    };
-                    format!("                {constructor}({pubkey_expr}, {}),\n", account.is_signer)
-                })
-                .collect::<String>();
-
+            let mut metas = String::new();
+            let mut signer_ordinal = 0usize;
+            for account in &ix.accounts {
+                let constructor = if account.is_mut { "AccountMeta::new" } else { "AccountMeta::new_readonly" };
+                let pubkey_expr = if account.is_signer {
+                    let ordinal = signer_ordinal;
+                    signer_ordinal += 1;
+                    format!("signer_pubkeys[{ordinal}]")
+                } else {
+                    pda_by_name
+                        .get(account.name.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| format!("account_address(\"{}\", payer, signer_pubkeys)", account.name))
+                };
+                metas.push_str(&format!("                {constructor}({pubkey_expr}, {}),\n", account.is_signer));
+            }
             format!(
                 "            FuzzInstruction::{}{} => vec![\n{}            ],\n",
                 to_pascal_case(&ix.name),
@@ -559,29 +707,206 @@ fn render_account_meta_match(config: &FuzzerConfig) -> String {
         .collect()
 }
 
+/// SPL token account data block for token-named accounts (owner `spl_token::ID`).
+/// Minted against the fuzz mint; owner is the payer (signer ordinal 0).
+const TOKEN_ACCOUNT_DATA: &str = "{\n                let acc = SplTokenAccount {\n                    mint: account_address(\"fuzz_mint\", payer, signer_pubkeys),\n                    owner: signer_pubkeys[0],\n                    amount: 1_000_000_000_000,\n                    delegate: COption::None,\n                    state: AccountState::Initialized,\n                    is_native: COption::None,\n                    delegated_amount: 0,\n                    close_authority: COption::None,\n                };\n                let mut data = vec![0u8; spl_token::state::Account::LEN];\n                spl_token::state::Account::pack(&acc, &mut data).expect(\"token account pack\");\n                data\n            }";
+
+/// SPL mint data block for mint-named accounts (owner `spl_token::ID`).
+const MINT_ACCOUNT_DATA: &str = "{\n                let mint = SplTokenMint {\n                    mint_authority: COption::Some(signer_pubkeys[0]),\n                    supply: 10_000_000_000_000_000,\n                    decimals: 9,\n                    is_initialized: true,\n                    freeze_authority: COption::None,\n                };\n                let mut data = vec![0u8; spl_token::state::Mint::LEN];\n                spl_token::state::Mint::pack(&mint, &mut data).expect(\"mint pack\");\n                data\n            }";
+
+/// Registration block for the shared fuzz mint (always emitted, so token
+/// account data can point at a real SPL mint).
+const FUZZ_MINT_BLOCK: &str = "    {\n        let mint_address = account_address(\"fuzz_mint\", payer, signer_pubkeys);\n        let mint = SplTokenMint {\n            mint_authority: COption::Some(signer_pubkeys[0]),\n            supply: 10_000_000_000_000_000,\n            decimals: 9,\n            is_initialized: true,\n            freeze_authority: COption::None,\n        };\n        let mut data = vec![0u8; spl_token::state::Mint::LEN];\n        spl_token::state::Mint::pack(&mint, &mut data).expect(\"mint pack\");\n        program_test.add_account(\n            mint_address,\n            Account { lamports: 10_000_000, data, owner: spl_token::ID, executable: false, rent_epoch: 0 },\n        );\n    }\n";
+
+/// First instruction (in IDL order) that declares each PDA account name → the
+/// generated `pda_<ix>_<acct>` call computing its IDL-seeded address.
+///
+/// Keyed by name (not per instruction) so a PDA account is addressed at the
+/// same real PDA everywhere: Anchor IDLs often carry `seeds` on a single
+/// instruction while later instructions reuse the same PDA account without
+/// repeating the `pda` block (e.g. `vaultState` in the vault fixture).
+/// `account_address` is *not* used for these names: it falls back to the
+/// deterministic sat-fuzz PDA, which would not match the program's own
+/// `find_program_address` and would fail every PDA constraint.
+fn pda_helper_names(config: &FuzzerConfig) -> HashMap<&str, String> {
+    let mut by_name = HashMap::new();
+    for ix in &config.instructions {
+        for account in &ix.accounts {
+            if account.pda {
+                by_name.entry(account.name.as_str()).or_insert_with(|| {
+                    format!(
+                        "pda_{}_{}(payer, &program_id(), signer_pubkeys).0",
+                        seed_ident(&ix.name),
+                        seed_ident(&account.name)
+                    )
+                });
+            }
+        }
+    }
+    by_name
+}
+
+/// Mirrors `fuzzer_seeds::sanitize_ident` so the harness references the exact
+/// `seeds_<ix>_<acct>` / `pda_<ix>_<acct>` identifiers the seeds module emits
+/// (keyword/digit/empty-name handling must stay in lockstep with that module).
+fn seed_ident(name: &str) -> String {
+    let mut out: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    if out.is_empty() {
+        out.push('_');
+    } else if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    if RUST_KEYWORDS.contains(&out.as_str()) {
+        out.push('_');
+    }
+    out
+}
+
+/// Name↔type matching heuristic used to pick the `accounts::build_*` factory
+/// for a seeded account. An account name resolves to an IDL account type when:
+/// 1. they match case-insensitively (`vaultState` ↔ `VaultState`), or
+/// 2. they match after stripping `_` separators and casing (camelCase ↔
+///    snake_case: `vault_state` ↔ `VaultState`), or
+/// 3. either normalized name matches by (1)/(2) after stripping a common
+///    suffix (`state`, `account`, `pda`, `info`, `data`).
+///
+/// Returns the IDL type name of the first match; `None` keeps the 1024-zero
+/// placeholder. Honest scaffolding: a heuristic match can be wrong for
+/// unusual names — the generated comment on the placeholder path documents it.
+fn matching_account_type<'a>(name: &str, account_types: &'a [String]) -> Option<&'a str> {
+    let normalized = |s: &str| -> String {
+        s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
+    };
+    let stripped = |s: &str| -> String {
+        let n = normalized(s);
+        for suffix in ["state", "account", "pda", "info", "data"] {
+            if let Some(rest) = n.strip_suffix(suffix).filter(|rest| !rest.is_empty()) {
+                return rest.to_string();
+            }
+        }
+        n
+    };
+    let name_norm = normalized(name);
+    account_types
+        .iter()
+        .find(|ty| normalized(ty) == name_norm || stripped(ty) == stripped(&name_norm))
+        .map(String::as_str)
+}
+
+/// Derives the `build_<snake>` identifier the layout module emits for an IDL
+/// account type, mirroring `fuzzer_layout::sanitize_type_name` followed by
+/// `fuzzer_layout::to_snake_case` (e.g. `VaultState` → `build_vault_state`).
+fn account_build_fn_name(type_name: &str) -> String {
+    let mut ident: String = type_name.chars().filter(|ch| ch.is_ascii_alphanumeric()).collect();
+    if ident.is_empty() {
+        ident.push_str("Type");
+    } else if ident.chars().next().is_some_and(|ch| ch.is_ascii_lowercase()) {
+        let first = ident.remove(0).to_ascii_uppercase();
+        ident.insert(0, first);
+    } else if ident.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        ident.insert(0, 'T');
+    }
+    if RUST_KEYWORDS.contains(&ident.as_str()) {
+        ident.push('_');
+    }
+
+    let chars: Vec<char> = ident.chars().collect();
+    let mut out = String::new();
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch.is_ascii_uppercase() {
+            let breaks = i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
+            if breaks {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() { "field".to_string() } else { trimmed.to_string() }
+}
+
+/// True when at least one non-signer, non-well-known IDL account name contains
+/// "token" — i.e. the generated code actually constructs SPL token accounts,
+/// so the `SplTokenAccount`/`AccountState` imports are needed.
+fn has_seeded_token_accounts(config: &FuzzerConfig) -> bool {
+    config.instructions.iter().any(|ix| {
+        ix.accounts.iter().any(|account| {
+            !account.is_signer
+                && !is_well_known_account_name(&account.name)
+                && account.name.to_lowercase().contains("token")
+        })
+    })
+}
+
+/// Seeds real accounts into the `ProgramTest` environment:
+///
+/// - the fuzz mint (SPL `Mint` at `account_address("fuzz_mint", ...)`);
+/// - one account per distinct non-signer, non-well-known IDL account name
+///   (deduplicated across instructions): PDA accounts at their IDL-seeded
+///   address via the generated `pda_<ix>_<acct>` helpers, everything else via
+///   `account_address`;
+/// - token/mint-named accounts as SPL token accounts / mints (owner
+///   `spl_token::ID`); accounts whose name matches an IDL account type are
+///   seeded with discriminator + borsh data (`accounts::build_*`); unknown
+///   account types keep the 1024-zero-byte placeholder.
 fn render_seed_accounts(config: &FuzzerConfig) -> String {
-    let mut accounts = BTreeMap::new();
+    let pda_by_name = pda_helper_names(config);
+    // name → (address expr, data expr, owner expr) — one registration per name.
+    let mut accounts: BTreeMap<&str, (String, String, String)> = BTreeMap::new();
+    let mut uses_rng = false;
     for ix in &config.instructions {
         for account in &ix.accounts {
             if account.is_signer || is_well_known_account_name(&account.name) {
                 continue;
             }
-            accounts.insert(account.name.clone(), account.is_mut);
+            let address_expr = match pda_by_name.get(account.name.as_str()) {
+                Some(expr) => expr.clone(),
+                None => format!("account_address(\"{}\", payer, signer_pubkeys)", account.name),
+            };
+            let lower = account.name.to_lowercase();
+            let (data_expr, owner_expr) = if lower.contains("token") {
+                (TOKEN_ACCOUNT_DATA.to_string(), "spl_token::ID".to_string())
+            } else if lower.contains("mint") {
+                (MINT_ACCOUNT_DATA.to_string(), "spl_token::ID".to_string())
+            } else if let Some(type_name) = matching_account_type(&account.name, &config.account_types) {
+                uses_rng = true;
+                (format!("accounts::build_{}(&mut rng)", account_build_fn_name(type_name)), "program_id()".to_string())
+            } else {
+                (
+                    "/* unknown account type — placeholder data, wire manually */ vec![0; 1024]".to_string(),
+                    "program_id()".to_string(),
+                )
+            };
+            accounts.entry(&account.name).or_insert((address_expr, data_expr, owner_expr));
         }
     }
 
+    let mut out = String::new();
+    out.push_str("    // Fuzz mint (SPL): shared mint for every generated token account.\n");
+    out.push_str(FUZZ_MINT_BLOCK);
     if accounts.is_empty() {
-        return "    // No non-signer IDL accounts found to seed.\n".to_string();
+        out.push_str("    // No other non-signer IDL accounts to seed.\n");
+        return out;
     }
-
-    accounts
-        .keys()
-        .map(|name| {
-            format!(
-                "    program_test.add_account(\n        fuzz_account_pubkey(\"{name}\"),\n        Account {{ lamports: 10_000_000, data: vec![0; 1024], owner: program_id(), executable: false, rent_epoch: 0 }},\n    );\n"
-            )
-        })
-        .collect()
+    out.push_str("    // One seeded account per distinct name (deduplicated across instructions).\n");
+    out.push_str("    // PDA accounts are placed at their IDL-seeded address via the generated\n");
+    out.push_str("    // `pda_<ix>_<acct>` helpers; `account_address` would fall back to the sat-fuzz\n");
+    out.push_str("    // placeholder PDA for those names. Everything else resolves via `account_address`\n");
+    out.push_str("    // (well-known canonicals, signer pubkeys, sat-fuzz PDA). Accounts without a\n");
+    out.push_str("    // matching IDL account type keep the 1024-zero-byte placeholder — wire manually.\n");
+    if uses_rng {
+        out.push_str("    let mut rng = rand::thread_rng();\n");
+    }
+    for (name, (address_expr, data_expr, owner_expr)) in &accounts {
+        out.push_str(&format!(
+            "    // {name}\n    program_test.add_account(\n        {address_expr},\n        Account {{\n            lamports: 10_000_000,\n            data: {data_expr},\n            owner: {owner_expr},\n            executable: false,\n            rent_epoch: 0,\n        }},\n    );\n"
+        ));
+    }
+    out
 }
 
 fn render_invariants(config: &FuzzerConfig) -> String {
@@ -683,16 +1008,17 @@ fn instruction_discriminator(name: &str) -> [u8; 8] {
     discriminator
 }
 
+/// True when `name` is a well-known program/sysvar, matching any casing and
+/// separator spelling (`systemProgram`, `token_2022_program`, ...) the same way
+/// `fuzzer_seeds::well_known_index` does. Kept here (instead of relying on
+/// `account_address`) because seeding must *skip* these accounts entirely —
+/// registering data at the canonical system-program address would clobber it.
 fn is_well_known_account_name(name: &str) -> bool {
+    let normalized: String =
+        name.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect();
     matches!(
-        name,
-        "system_program"
-            | "token_program"
-            | "token_2022_program"
-            | "token2022_program"
-            | "rent"
-            | "clock"
-            | "instructions"
+        normalized.as_str(),
+        "systemprogram" | "tokenprogram" | "token2022program" | "rent" | "clock" | "instructions"
     )
 }
 
@@ -742,7 +1068,7 @@ use libfuzzer_sys::fuzz_target;
 
 use {crate_name}::{{check_invariants, set_up_program_test, snapshot_instruction_accounts, FuzzInstruction}};
 
-use solana_sdk::{{signature::Signer, transaction::Transaction}};
+use solana_sdk::{{pubkey::Pubkey, signature::Signer, signer::keypair::Keypair, transaction::Transaction}};
 
 #[derive(Arbitrary, Debug)]
 struct FuzzInput {{
@@ -752,16 +1078,23 @@ struct FuzzInput {{
 fuzz_target!(|input: FuzzInput| {{
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {{
-        let program_test = set_up_program_test();
-        let (mut banks_client, payer, recent_blockhash) = program_test.start().await;
+        let (program_test, payer, keypairs) = set_up_program_test();
+        let (mut banks_client, _start_payer, recent_blockhash) = program_test.start().await;
+
+        let signer_pubkeys: Vec<Pubkey> =
+            std::iter::once(payer.pubkey()).chain(keypairs.iter().map(|k| k.pubkey())).collect();
 
         let mut trace = Vec::new();
         for ix in &input.instructions {{
-            let instruction = ix.to_instruction(&payer.pubkey()).expect("failed to serialize instruction");
+            let instruction =
+                ix.to_instruction(&payer.pubkey(), &signer_pubkeys)
+                    .expect("failed to serialize instruction");
             let before = snapshot_instruction_accounts(&mut banks_client, &instruction).await;
 
             let mut transaction = Transaction::new_with_payer(&[instruction.clone()], Some(&payer.pubkey()));
-            transaction.sign(&[&payer], recent_blockhash);
+            // Extra signatures are harmless; every funded keypair signs.
+            let signers: Vec<&Keypair> = std::iter::once(&payer).chain(keypairs.iter()).collect();
+            transaction.sign(&signers, recent_blockhash);
 
             if banks_client.process_transaction(transaction).await.is_err() {{
                 break;
@@ -780,6 +1113,59 @@ fuzz_target!(|input: FuzzInput| {{
         prog = config.program_name,
         date = date,
         crate_name = config.crate_name,
+    )
+}
+
+/// Renders the generated fuzzer's README: what was generated, the honest scope
+/// (covered primitives vs placeholder fallbacks), and how to run it.
+fn render_readme(config: &FuzzerConfig) -> String {
+    format!(
+        r#"# Fuzzer for {program}
+
+Auto-generated by `sat fuzz init` for the `{lib}` Anchor program (program ID `{pid}`).
+
+## What was generated
+
+- `src/lib.rs` — the fuzz harness:
+  - `pub mod accounts` — IDL account layouts with Anchor discriminators
+    (`sha256("account:<name>")[..8]`) and borsh-serialized `build_*` factories;
+  - `account_address`, `seeds_<ix>_<acct>` and `pda_<ix>_<acct>` — real PDA
+    addresses derived from the program's IDL seeds, plus `MAX_SIGNERS` and
+    `signer_count_*` signer bookkeeping;
+  - `set_up_program_test` — funds a payer plus additional signer keypairs
+    (per `MAX_SIGNERS`) and seeds real accounts: the fuzz mint (SPL), SPL
+    token accounts for token-named accounts, and IDL-typed accounts at their
+    derived PDA addresses;
+  - invariant hooks: `check_token_supply`, `check_vault_consistency`,
+    `check_unexpected_account_drain`, `check_authority_immutability`,
+    `check_state_integrity`.
+- `fuzz_targets/instruction_fuzz.rs` — libFuzzer target: builds a transaction
+  per fuzzed `FuzzInstruction`, executes it in `solana-program-test`, and runs
+  the invariant checks after each instruction.
+- `Cargo.toml` — dependency versions mirrored from `programs/{lib}/Cargo.toml`
+  when available (falls back to defaults with a `# WARN` comment otherwise).
+
+## Honest scope
+
+- Covered automatically: primitive scalars and common containers (`Vec`,
+  `Option`, `[T; N]`), `String`, `Pubkey`, enums, and IDL account structs.
+- Not covered automatically: unsupported field types and Token-2022 extension
+  accounts fall back to placeholder data that needs manual wiring.
+- Arg-seeded PDAs are fixed placeholders (`vec![0u8; 32]`) — fuzzed args
+  cannot be predicted, so wire them to the actual payload if those PDAs matter.
+- Accounts whose name does not match an IDL account type are seeded with 1024
+  zero bytes — extend `seed_fuzz_accounts` for those.
+
+## Running
+
+Requires `cargo-fuzz` (install once with `cargo install cargo-fuzz`):
+
+    cd fuzzer
+    cargo fuzz run instruction_fuzz
+"#,
+        program = config.program_name,
+        lib = config.program_lib_name,
+        pid = config.program_id,
     )
 }
 
@@ -834,6 +1220,7 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn test_config(instructions: Vec<FuzzerInstructionConfig>) -> FuzzerConfig {
         FuzzerConfig {
@@ -842,6 +1229,7 @@ mod tests {
             crate_name: "fuzzer_test_program".to_string(),
             program_id: DEFAULT_PROGRAM_ID.to_string(),
             instructions,
+            account_types: vec![],
             has_vault: false,
             has_token: false,
             has_state_init_flag: false,
@@ -854,6 +1242,16 @@ mod tests {
 
     fn arg(name: &str, ty: FuzzerArgType) -> FuzzerArgConfig {
         FuzzerArgConfig { name: name.to_string(), ty }
+    }
+
+    /// Parses the vault fixture and renders the config plus the three generated
+    /// modules exactly as `fuzzer::init` does for an IDL-bearing workspace.
+    fn vault_fixture() -> (FuzzerConfig, String, String, String) {
+        let idl = idl::parse_idl("tests/fixtures/vault.json").expect("parse vault fixture");
+        let layout = fuzzer_layout::render_account_factories(&idl);
+        let pda_setup = fuzzer_seeds::render_pda_setup(&idl);
+        let signer_info = fuzzer_seeds::render_signer_info(&idl);
+        (config_from_idl(idl), layout, pda_setup, signer_info)
     }
 
     #[test]
@@ -994,5 +1392,115 @@ mod tests {
             FuzzerArgType::Unsupported,
         ];
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn generated_lib_embeds_account_factories_and_pda_helpers() {
+        let (config, layout, pda_setup, signer_info) = vault_fixture();
+        let rendered = render_lib_rs(&config, &layout, &pda_setup, &signer_info);
+
+        for needle in [
+            "pub mod accounts",
+            "pub fn account_address(name: &str, payer: &Pubkey, signer_pubkeys: &[Pubkey]) -> Pubkey",
+            "pub fn seeds_initializeVault_vaultState",
+            "pub fn pda_initializeVault_vaultState",
+            "pub fn signer_count_initializeVault",
+            "pub const MAX_SIGNERS: usize = 1;",
+            "spl_token", // fuzz mint + token seeding
+        ] {
+            assert!(rendered.contains(needle), "missing {needle:?} in rendered lib.rs");
+        }
+
+        // The entire rendered lib.rs must parse as valid Rust.
+        syn::parse_file(&rendered)
+            .unwrap_or_else(|err| panic!("rendered lib.rs does not parse: {err}\n---\n{rendered}"));
+    }
+
+    #[test]
+    fn generated_target_uses_funded_signer_keypairs() {
+        let config = default_config();
+        let target = render_fuzz_target(&config);
+
+        assert!(target.contains("let (program_test, payer, keypairs) = set_up_program_test();"));
+        assert!(
+            target.contains("let (mut banks_client, _start_payer, recent_blockhash) = program_test.start().await;")
+        );
+        assert!(target.contains("let signer_pubkeys: Vec<Pubkey>"));
+        assert!(target.contains("ix.to_instruction(&payer.pubkey(), &signer_pubkeys)"));
+        assert!(target.contains("let signers: Vec<&Keypair>"));
+        assert!(target.contains("transaction.sign(&signers, recent_blockhash)"));
+    }
+
+    #[test]
+    fn no_idl_fallback_renders_placeholder_seeding() {
+        let empty_idl = idl::IdlJson {
+            version: "0.1.0".to_string(),
+            name: "program".to_string(),
+            instructions: vec![],
+            accounts: vec![],
+            types: vec![],
+            metadata: None,
+        };
+        let layout = fuzzer_layout::render_account_factories(&empty_idl);
+        let pda_setup = fuzzer_seeds::render_pda_setup(&empty_idl);
+        let signer_info = fuzzer_seeds::render_signer_info(&empty_idl);
+        let config = default_config();
+        let rendered = render_lib_rs(&config, &layout, &pda_setup, &signer_info);
+
+        assert!(rendered.contains("pub const MAX_SIGNERS: usize = 1;"));
+        // No IDL account types: `state` resolves via account_address (which
+        // falls back to fuzz_account_pubkey) and keeps the zero-byte placeholder.
+        assert!(rendered.contains("account_address(\"state\", payer, signer_pubkeys)"));
+        assert!(rendered.contains("vec![0; 1024]"));
+        syn::parse_file(&rendered)
+            .unwrap_or_else(|err| panic!("fallback lib.rs does not parse: {err}\n---\n{rendered}"));
+    }
+
+    #[test]
+    fn cargo_toml_mirrors_program_versions() {
+        let dir = tempdir().expect("tempdir");
+        let toml_path = dir.path().join("Cargo.toml");
+        fs::write(
+            &toml_path,
+            r#"[package]
+name = "vault"
+version = "0.1.0"
+
+[dependencies]
+anchor-lang = "0.30.1"
+solana-program = "2.1.0"
+solana-sdk = "2.1.0"
+solana-program-test = "2.1.0"
+spl-token = "7.1.0"
+spl-token-2022 = "7.1.0"
+"#,
+        )
+        .expect("write temp Cargo.toml");
+
+        let versions = program_dependency_versions(&toml_path);
+        assert_eq!(versions.get("anchor-lang").map(String::as_str), Some("0.30.1"));
+        assert_eq!(versions.get("spl-token-2022").map(String::as_str), Some("7.1.0"));
+
+        let config = test_config(vec![]);
+        let rendered = render_cargo_toml(&config, &toml_path);
+        assert!(rendered.contains("anchor-lang = \"0.30.1\""), "{rendered}");
+        assert!(rendered.contains("solana-program = \"2.1.0\""), "{rendered}");
+        assert!(rendered.contains("spl-token-2022 = \"7.1.0\""), "{rendered}");
+        assert!(!rendered.contains("WARN"), "{rendered}");
+
+        // Versions also resolve from [workspace.dependencies].
+        let ws_dir = tempdir().expect("tempdir");
+        let ws_toml = ws_dir.path().join("Cargo.toml");
+        fs::write(&ws_toml, "[workspace.dependencies]\nsolana-program = \"1.18.26\"\n")
+            .expect("write workspace Cargo.toml");
+        let versions = program_dependency_versions(&ws_toml);
+        assert_eq!(versions.get("solana-program").map(String::as_str), Some("1.18.26"));
+
+        // Fallback: missing file → default versions + WARN comment.
+        let missing = dir.path().join("nope").join("Cargo.toml");
+        let rendered = render_cargo_toml(&config, &missing);
+        assert!(rendered.contains("anchor-lang = \"0.29\""), "{rendered}");
+        assert!(rendered.contains("solana-program = \"4\""), "{rendered}");
+        assert!(rendered.contains("# WARN: could not read"), "{rendered}");
     }
 }

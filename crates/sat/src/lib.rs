@@ -2,6 +2,8 @@ pub mod analyzer;
 pub mod cpi;
 pub mod deserialization;
 pub mod fuzzer;
+pub mod fuzzer_layout;
+pub mod fuzzer_seeds;
 pub mod idl;
 pub mod init_guard;
 pub mod pda;
