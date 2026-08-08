@@ -7,6 +7,7 @@ mod deserialization;
 mod fuzzer;
 mod fuzzer_layout;
 mod fuzzer_seeds;
+mod fuzzer_token2022;
 mod idl;
 mod init_guard;
 mod pda;

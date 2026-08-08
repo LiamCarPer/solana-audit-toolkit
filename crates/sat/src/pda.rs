@@ -27,8 +27,14 @@
 //!
 //! * Instruction → accounts struct: case-insensitive equality, or the
 //!   instruction name ending with the struct name (or vice versa) — the
-//!   same heuristic as `tx_report::check_tx_report_correlation`. An exact
-//!   name match is preferred over a suffix match.
+//!   same heuristic as `tx_report::check_tx_report_correlation`. Exact
+//!   name matches are preferred over suffix matches, and among the
+//!   remaining candidates the one whose file contains a `#[program]`
+//!   handler with that struct as its `Context<...>` type is preferred
+//!   (Anchor keeps a handler and its accounts struct in the same file).
+//!   If the candidates are still ambiguous — same-named structs in
+//!   several files and no handler evidence — the instruction is skipped
+//!   rather than risk a false positive against the wrong file's struct.
 //! * IDL account → struct field: case-insensitive exact match.
 //!
 //! # Findings
@@ -47,9 +53,9 @@
 //! `kind == "bump"` seed, which is unverifiable and disables the count
 //! check for that field.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::analyzer::{AccountField, AccountsStruct};
+use crate::analyzer::{AccountField, AccountsStruct, type_to_string};
 use crate::idl::{IdlAccountItem, IdlJson, IdlSeed};
 use crate::types::{Finding, Severity};
 
@@ -104,12 +110,23 @@ pub fn check_pda_seed_mismatch(
 
     // `AccountField` only records *whether* seeds are present, not the seed
     // expressions, so re-parse the `#[account(...)]` attributes from the raw
-    // sources: struct name → field name → seed info.
-    let mut seeds_by_struct: HashMap<String, HashMap<String, CodeSeedInfo>> = HashMap::new();
-    for (file, _path) in parsed_files {
+    // sources: (file, struct name) → field name → seed info. Struct names are
+    // only unique within a file; keying by name alone would merge same-named
+    // structs across files of a multi-file workspace.
+    let mut seeds_by_struct: HashMap<(String, String), HashMap<String, CodeSeedInfo>> = HashMap::new();
+    for (file, path) in parsed_files {
         for (struct_name, fields) in extract_seeds_from_file(file) {
-            seeds_by_struct.entry(struct_name).or_default().extend(fields);
+            seeds_by_struct.entry((path.clone(), struct_name)).or_default().extend(fields);
         }
+    }
+
+    // Per-file handler map: file path → struct names referenced as
+    // `Context<...>` by `#[program]` handlers in that file. Anchor keeps a
+    // handler and its accounts struct in the same file, so this scopes the
+    // instruction→struct match by file.
+    let mut handled_by_file: HashMap<&str, HashSet<String>> = HashMap::new();
+    for (file, path) in parsed_files {
+        handled_by_file.insert(path.as_str(), handled_struct_names(file));
     }
 
     for ix in &idl.instructions {
@@ -117,17 +134,38 @@ pub fn check_pda_seed_mismatch(
 
         // Instruction name → accounts struct, same heuristic as tx_report:
         // case-insensitive equality, or one name ending with the other.
-        let matches: Vec<&AccountsStruct> = accounts
+        let candidates: Vec<&AccountsStruct> = accounts
             .iter()
             .filter(|accts| {
                 let struct_lower = accts.name.to_lowercase();
                 struct_lower == ix_lower || ix_lower.ends_with(&struct_lower) || struct_lower.ends_with(&ix_lower)
             })
             .collect();
-        // Prefer an exact case-insensitive name match over a suffix match.
-        let Some(accts) =
-            matches.iter().find(|a| a.name.to_lowercase() == ix_lower).copied().or_else(|| matches.first().copied())
-        else {
+        // (a) Prefer an exact case-insensitive name match over a suffix match.
+        let exact: Vec<&AccountsStruct> =
+            candidates.iter().copied().filter(|a| a.name.to_lowercase() == ix_lower).collect();
+        let preferred = if exact.is_empty() { candidates } else { exact };
+        // (b) Among the remaining candidates, prefer the one whose file
+        // contains a handler whose `Context<...>` type is this struct. In
+        // single-file projects this is a no-op: every candidate shares the
+        // file, so the handler evidence selects them all equally.
+        let by_handler: Vec<&AccountsStruct> = preferred
+            .iter()
+            .copied()
+            .filter(|a| {
+                handled_by_file
+                    .get(a.file.to_string_lossy().as_ref())
+                    .is_some_and(|names| names.contains(&a.name.to_lowercase()))
+            })
+            .collect();
+        let chosen = if by_handler.is_empty() { preferred } else { by_handler };
+        // (c) Still ambiguous: same-named structs in several files and no
+        // handler evidence to pick between them. Skip the instruction rather
+        // than risk a false positive against the wrong file's struct.
+        if chosen.len() > 1 {
+            continue;
+        }
+        let Some(accts) = chosen.first().copied() else {
             continue;
         };
 
@@ -143,10 +181,14 @@ pub fn check_pda_seed_mismatch(
                 continue;
             };
 
-            // Code-side seeds for this field. If the struct does not appear
-            // in the parsed sources at all, treat it as unverifiable rather
-            // than reporting a missing constraint we could not confirm.
-            let code_seeds = match seeds_by_struct.get(&accts.name) {
+            // Code-side seeds for this field, scoped to the chosen struct's
+            // file: the IDL seeds must be compared against the same file's
+            // struct, not a same-named one from another file. If the struct
+            // does not appear in the parsed sources at all, treat it as
+            // unverifiable rather than reporting a missing constraint we
+            // could not confirm.
+            let struct_key = (accts.file.to_string_lossy().into_owned(), accts.name.clone());
+            let code_seeds = match seeds_by_struct.get(&struct_key) {
                 Some(fields) => fields.get(&field.name).map(|info| &info.seeds).unwrap_or(&SeedsInfo::Unverifiable),
                 None => &SeedsInfo::Unverifiable,
             };
@@ -225,17 +267,19 @@ fn extract_seeds_from_file(file: &syn::File) -> HashMap<String, HashMap<String, 
                 }
                 let _ = attr.parse_nested_meta(|meta| {
                     let key = meta.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
-                    if key == "seeds" && meta.input.peek(syn::Token![=]) {
-                        if let Ok(value) = meta.value().and_then(|v| v.parse::<syn::Expr>()) {
+                    if meta.input.peek(syn::Token![=]) {
+                        // The value must be consumed for EVERY `key = value` item,
+                        // or parse_nested_meta's comma handling aborts and later
+                        // keys (like `seeds`) are never visited.
+                        let value = meta.value().and_then(|v| v.parse::<syn::Expr>());
+                        if key == "seeds" {
                             match value {
-                                syn::Expr::Array(array) => {
+                                Ok(syn::Expr::Array(array)) => {
                                     info.seeds =
                                         SeedsInfo::Parsed(array.elems.iter().map(normalize_code_seed).collect());
                                 }
                                 _ => info.seeds = SeedsInfo::Unverifiable,
                             }
-                        } else {
-                            info.seeds = SeedsInfo::Unverifiable;
                         }
                     } else if key == "bump" {
                         info.has_bump = true;
@@ -250,6 +294,45 @@ fn extract_seeds_from_file(file: &syn::File) -> HashMap<String, HashMap<String, 
     }
 
     structs
+}
+
+// ── Handler scoping (per-file disambiguation) ─────────────────────────────────
+
+/// Extract the accounts struct name from a handler's first parameter
+/// (`fn deposit(ctx: Context<Deposit>)` → `Deposit`). Replicates
+/// `token_cpi::handler_ctx_type` locally so this module stays
+/// self-contained.
+fn handler_ctx_type(func: &syn::ItemFn) -> Option<String> {
+    let first = func.sig.inputs.iter().find_map(|input| match input {
+        syn::FnArg::Typed(pat) => Some(pat),
+        _ => None,
+    })?;
+    let ty = type_to_string(&first.ty);
+    let rest = ty.strip_prefix("Context<")?.strip_suffix('>')?;
+    Some(rest.to_string())
+}
+
+/// Struct names referenced as `Context<...>` by public `#[program]` handlers
+/// in a file, lowercased for case-insensitive matching.
+fn handled_struct_names(file: &syn::File) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for item in &file.items {
+        let syn::Item::Mod(item_mod) = item else { continue };
+        if !item_mod.attrs.iter().any(|a| a.path().is_ident("program")) {
+            continue;
+        }
+        let Some((_, items)) = &item_mod.content else { continue };
+        for mod_item in items {
+            let syn::Item::Fn(func) = mod_item else { continue };
+            if !matches!(func.vis, syn::Visibility::Public(_)) {
+                continue;
+            }
+            if let Some(ctx_type) = handler_ctx_type(func) {
+                names.insert(ctx_type.to_lowercase());
+            }
+        }
+    }
+    names
 }
 
 /// Replicates the `#[derive(Accounts)]` detection in

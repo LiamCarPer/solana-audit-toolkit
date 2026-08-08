@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::fuzzer_layout;
 use crate::fuzzer_seeds;
+use crate::fuzzer_token2022;
 use crate::idl;
 use crate::ui;
 
@@ -26,6 +27,7 @@ struct FuzzerConfig {
     account_types: Vec<String>,
     has_vault: bool,
     has_token: bool,
+    has_token_2022: bool,
     has_state_init_flag: bool,
 }
 
@@ -112,7 +114,7 @@ pub fn init() -> Result<()> {
     ui::print_banner();
     ui::print_section_header("Fuzzer Initialization");
 
-    let (config, layout, pda_setup, signer_info) =
+    let (mut config, layout, pda_setup, signer_info) =
         match idl::find_idl_in_workspace().ok().and_then(|p| idl::parse_idl(&p).ok()) {
             Some(idl) => {
                 let layout = fuzzer_layout::render_account_factories(&idl);
@@ -137,7 +139,15 @@ pub fn init() -> Result<()> {
             }
         };
 
-    generate_fuzzer(&config, &layout, &pda_setup, &signer_info)?;
+    // Token-2022 detection: OR in the target program's Cargo.toml (the same
+    // file version mirroring reads); `config_from_idl` already applied the
+    // IDL account-name fallback.
+    let program_toml = PathBuf::from("programs").join(&config.program_lib_name).join("Cargo.toml");
+    if program_has_token_2022(&program_toml) {
+        config.has_token_2022 = true;
+    }
+
+    generate_fuzzer(&config, &layout, &pda_setup, &signer_info, &program_toml)?;
     update_workspace_cargo()?;
 
     ui::print_success("Fuzzer crate generated successfully.");
@@ -191,6 +201,11 @@ fn config_from_idl(idl: idl::IdlJson) -> FuzzerConfig {
             lower == "is_initialized" || lower == "initialized" || lower == "isinitialized"
         })
     });
+    // IDL-name fallback for token-2022: any instruction account name containing
+    // "2022" (covers `token_2022_program` / `token2022_program`). `init()` ORs
+    // in the primary signal (the target program's Cargo.toml dependency).
+    let has_token_2022 =
+        instructions.iter().any(|ix| ix.accounts.iter().any(|account| account.name.to_lowercase().contains("2022")));
 
     FuzzerConfig {
         program_name,
@@ -201,6 +216,7 @@ fn config_from_idl(idl: idl::IdlJson) -> FuzzerConfig {
         account_types: idl.accounts.iter().map(|account| account.name.clone()).collect(),
         has_vault,
         has_token,
+        has_token_2022,
         has_state_init_flag,
     }
 }
@@ -246,6 +262,7 @@ fn default_config() -> FuzzerConfig {
         account_types: vec![],
         has_vault: false,
         has_token: false,
+        has_token_2022: false,
         has_state_init_flag: false,
     }
 }
@@ -308,13 +325,18 @@ fn unsupported_arg_names(ix: &FuzzerInstructionConfig) -> String {
         .join(", ")
 }
 
-fn generate_fuzzer(config: &FuzzerConfig, layout: &str, pda_setup: &str, signer_info: &str) -> Result<()> {
+fn generate_fuzzer(
+    config: &FuzzerConfig,
+    layout: &str,
+    pda_setup: &str,
+    signer_info: &str,
+    program_toml: &Path,
+) -> Result<()> {
     let dir = PathBuf::from(FUZZER_DIR);
     fs::create_dir_all(dir.join("src"))?;
     fs::create_dir_all(dir.join("fuzz_targets"))?;
 
-    let program_toml = PathBuf::from("programs").join(&config.program_lib_name).join("Cargo.toml");
-    fs::write(dir.join("Cargo.toml"), render_cargo_toml(config, &program_toml))?;
+    fs::write(dir.join("Cargo.toml"), render_cargo_toml(config, program_toml))?;
     fs::write(dir.join("src").join("lib.rs"), render_lib_rs(config, layout, pda_setup, signer_info))?;
     fs::write(dir.join("fuzz_targets").join("instruction_fuzz.rs"), render_fuzz_target(config))?;
     fs::write(dir.join("README.md"), render_readme(config))?;
@@ -364,6 +386,30 @@ fn program_dependency_versions(path: &Path) -> HashMap<String, String> {
         }
     }
     versions
+}
+
+/// True when the target program's Cargo.toml — the same file version mirroring
+/// reads — declares `spl-token-2022` or `token-2022` in `[dependencies]` or
+/// `[workspace.dependencies]` (keys compared case-insensitively). A
+/// missing/unparseable file yields `false`; callers fall back to IDL
+/// account-name detection.
+fn program_has_token_2022(path: &Path) -> bool {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return false,
+    };
+    let table: toml::Value = match content.parse() {
+        Ok(table) => table,
+        Err(_) => return false,
+    };
+    let sections = [
+        table.get("dependencies").and_then(toml::Value::as_table),
+        table.get("workspace").and_then(|ws| ws.get("dependencies")).and_then(toml::Value::as_table),
+    ];
+    sections
+        .into_iter()
+        .flatten()
+        .any(|deps| deps.keys().any(|key| matches!(key.to_ascii_lowercase().as_str(), "spl-token-2022" | "token-2022")))
 }
 
 fn render_cargo_toml(config: &FuzzerConfig, program_toml: &Path) -> String {
@@ -427,11 +473,17 @@ fn render_lib_rs(config: &FuzzerConfig, layout: &str, pda_setup: &str, signer_in
     let checks = render_invariant_checks(config);
     let date = chrono::Local::now().format("%Y-%m-%d");
     let ix_list = config.instruction_names().join(", ");
-    let token_account_import = if has_seeded_token_accounts(config) {
+    let token_account_import = if has_seeded_token_accounts(config) && !config.has_token_2022 {
+        // In token-2022 mode token accounts are seeded by the `token2022_accounts`
+        // module, so the `spl_token` account types are not referenced here.
         "use spl_token::state::{Account as SplTokenAccount, AccountState};\n"
     } else {
         ""
     };
+    // Token-2022 extension factories: a complete `pub mod` embedded as-is after
+    // the layout module when the program is token-2022, nothing otherwise.
+    let token_2022_factories =
+        if config.has_token_2022 { fuzzer_token2022::render_token_2022_factories() } else { String::new() };
 
     format!(
         r#"// Auto-generated by `sat fuzz init` — {date}
@@ -454,7 +506,7 @@ use solana_sdk::{{
 use spl_token::state::Mint as SplTokenMint;
 {token_account_import}
 {layout}
-
+{token_2022_factories}
 {pda_setup}
 
 {signer_info}
@@ -570,6 +622,7 @@ pub fn check_invariants(
         ix_list = ix_list,
         token_account_import = token_account_import,
         layout = layout,
+        token_2022_factories = token_2022_factories,
         pda_setup = pda_setup,
         signer_info = signer_info,
         enum_variants = render_arbitrary_enum_variants(config),
@@ -708,14 +761,17 @@ fn render_account_meta_match(config: &FuzzerConfig) -> String {
 }
 
 /// SPL token account data block for token-named accounts (owner `spl_token::ID`).
-/// Minted against the fuzz mint; owner is the payer (signer ordinal 0).
-const TOKEN_ACCOUNT_DATA: &str = "{\n                let acc = SplTokenAccount {\n                    mint: account_address(\"fuzz_mint\", payer, signer_pubkeys),\n                    owner: signer_pubkeys[0],\n                    amount: 1_000_000_000_000,\n                    delegate: COption::None,\n                    state: AccountState::Initialized,\n                    is_native: COption::None,\n                    delegated_amount: 0,\n                    close_authority: COption::None,\n                };\n                let mut data = vec![0u8; spl_token::state::Account::LEN];\n                spl_token::state::Account::pack(&acc, &mut data).expect(\"token account pack\");\n                data\n            }";
+/// Minted against the resolved mint; owner is the payer (signer ordinal 0). The
+/// `{{mint_address_expr}}` placeholder is substituted in `render_seed_accounts`.
+const TOKEN_ACCOUNT_DATA: &str = "{\n                let acc = SplTokenAccount {\n                    mint: {mint_address_expr},\n                    owner: signer_pubkeys[0],\n                    amount: 1_000_000_000_000,\n                    delegate: COption::None,\n                    state: AccountState::Initialized,\n                    is_native: COption::None,\n                    delegated_amount: 0,\n                    close_authority: COption::None,\n                };\n                let mut data = vec![0u8; spl_token::state::Account::LEN];\n                spl_token::state::Account::pack(&acc, &mut data).expect(\"token account pack\");\n                data\n            }";
 
 /// SPL mint data block for mint-named accounts (owner `spl_token::ID`).
 const MINT_ACCOUNT_DATA: &str = "{\n                let mint = SplTokenMint {\n                    mint_authority: COption::Some(signer_pubkeys[0]),\n                    supply: 10_000_000_000_000_000,\n                    decimals: 9,\n                    is_initialized: true,\n                    freeze_authority: COption::None,\n                };\n                let mut data = vec![0u8; spl_token::state::Mint::LEN];\n                spl_token::state::Mint::pack(&mint, &mut data).expect(\"mint pack\");\n                data\n            }";
 
-/// Registration block for the shared fuzz mint (always emitted, so token
-/// account data can point at a real SPL mint).
+/// Registration block for the shared fuzz mint — emitted only when the IDL
+/// declares no mint-named instruction account (then the resolved mint address
+/// IS the `fuzz_mint` fallback). When a mint-named account exists, that
+/// account's own registration is the mint, so the mint is never registered twice.
 const FUZZ_MINT_BLOCK: &str = "    {\n        let mint_address = account_address(\"fuzz_mint\", payer, signer_pubkeys);\n        let mint = SplTokenMint {\n            mint_authority: COption::Some(signer_pubkeys[0]),\n            supply: 10_000_000_000_000_000,\n            decimals: 9,\n            is_initialized: true,\n            freeze_authority: COption::None,\n        };\n        let mut data = vec![0u8; spl_token::state::Mint::LEN];\n        spl_token::state::Mint::pack(&mint, &mut data).expect(\"mint pack\");\n        program_test.add_account(\n            mint_address,\n            Account { lamports: 10_000_000, data, owner: spl_token::ID, executable: false, rent_epoch: 0 },\n        );\n    }\n";
 
 /// First instruction (in IDL order) that declares each PDA account name → the
@@ -842,52 +898,105 @@ fn has_seeded_token_accounts(config: &FuzzerConfig) -> bool {
     })
 }
 
+/// How a seeded account's data is produced; the renderer picks the factory per
+/// mode (`spl_token` vs the `token2022_accounts` factories).
+enum AccountSeedKind {
+    /// Token-named account → SPL token account (owner `spl_token::ID`) or
+    /// `token2022_accounts::seed_token_account`.
+    Token,
+    /// Mint-named account → SPL mint (owner `spl_token::ID`) or
+    /// `token2022_accounts::seed_fuzz_mint` (they ARE mints).
+    Mint,
+    /// Name matches an IDL account type → `accounts::build_<snake>` factory.
+    Typed(String),
+    /// No match → 1024-zero-byte placeholder.
+    Placeholder,
+}
+
 /// Seeds real accounts into the `ProgramTest` environment:
 ///
-/// - the fuzz mint (SPL `Mint` at `account_address("fuzz_mint", ...)`);
+/// - the fuzz mint at the *resolved mint address*: the first mint-named
+///   instruction account (e.g. `mint`) when the program declares one, else
+///   `account_address("fuzz_mint", ...)`. The mint is registered ONCE at that
+///   address and every generated token account references it, so mint
+///   consistency holds (`from.mint == mint`) even for programs that pass
+///   their own `mint` account. In token-2022 mode the mint is a Token-2022
+///   extension mint via `token2022_accounts::seed_fuzz_mint`; otherwise an
+///   SPL `Mint` via `add_account` (owner `spl_token::ID`);
 /// - one account per distinct non-signer, non-well-known IDL account name
 ///   (deduplicated across instructions): PDA accounts at their IDL-seeded
 ///   address via the generated `pda_<ix>_<acct>` helpers, everything else via
 ///   `account_address`;
 /// - token/mint-named accounts as SPL token accounts / mints (owner
-///   `spl_token::ID`); accounts whose name matches an IDL account type are
-///   seeded with discriminator + borsh data (`accounts::build_*`); unknown
-///   account types keep the 1024-zero-byte placeholder.
+///   `spl_token::ID`); in token-2022 mode they use the `token2022_accounts`
+///   factories (`seed_token_account` / `seed_fuzz_mint`, owner
+///   `spl_token_2022::ID`);
+/// - accounts whose name matches an IDL account type are seeded with
+///   discriminator + borsh data (`accounts::build_*`); unknown account types
+///   keep the 1024-zero-byte placeholder.
 fn render_seed_accounts(config: &FuzzerConfig) -> String {
     let pda_by_name = pda_helper_names(config);
-    // name → (address expr, data expr, owner expr) — one registration per name.
-    let mut accounts: BTreeMap<&str, (String, String, String)> = BTreeMap::new();
+    // Mint consistency: token accounts and the fuzz mint share ONE mint
+    // address — the first mint-named instruction account (e.g. `mint`), else
+    // the `fuzz_mint` fallback. The address resolves like any seeded account
+    // (PDA helpers included), so token accounts and the mint registration
+    // always agree.
+    let mint_account = config.instructions.iter().flat_map(|ix| ix.accounts.iter()).find(|account| {
+        !account.is_signer && !is_well_known_account_name(&account.name) && account.name.to_lowercase().contains("mint")
+    });
+    let address_for = |account: &FuzzerAccountConfig| -> String {
+        match pda_by_name.get(account.name.as_str()) {
+            Some(expr) => expr.clone(),
+            None => format!("account_address(\"{}\", payer, signer_pubkeys)", account.name),
+        }
+    };
+    let mint_address_expr = match mint_account {
+        Some(account) => address_for(account),
+        None => "account_address(\"fuzz_mint\", payer, signer_pubkeys)".to_string(),
+    };
+
+    // name → (address expr, kind) — one registration per distinct name.
+    let mut accounts: BTreeMap<&str, (String, AccountSeedKind)> = BTreeMap::new();
     let mut uses_rng = false;
     for ix in &config.instructions {
         for account in &ix.accounts {
             if account.is_signer || is_well_known_account_name(&account.name) {
                 continue;
             }
-            let address_expr = match pda_by_name.get(account.name.as_str()) {
-                Some(expr) => expr.clone(),
-                None => format!("account_address(\"{}\", payer, signer_pubkeys)", account.name),
-            };
             let lower = account.name.to_lowercase();
-            let (data_expr, owner_expr) = if lower.contains("token") {
-                (TOKEN_ACCOUNT_DATA.to_string(), "spl_token::ID".to_string())
+            let kind = if lower.contains("token") {
+                AccountSeedKind::Token
             } else if lower.contains("mint") {
-                (MINT_ACCOUNT_DATA.to_string(), "spl_token::ID".to_string())
+                AccountSeedKind::Mint
             } else if let Some(type_name) = matching_account_type(&account.name, &config.account_types) {
                 uses_rng = true;
-                (format!("accounts::build_{}(&mut rng)", account_build_fn_name(type_name)), "program_id()".to_string())
+                AccountSeedKind::Typed(account_build_fn_name(type_name))
             } else {
-                (
-                    "/* unknown account type — placeholder data, wire manually */ vec![0; 1024]".to_string(),
-                    "program_id()".to_string(),
-                )
+                AccountSeedKind::Placeholder
             };
-            accounts.entry(&account.name).or_insert((address_expr, data_expr, owner_expr));
+            accounts.entry(&account.name).or_insert((address_for(account), kind));
         }
     }
 
     let mut out = String::new();
-    out.push_str("    // Fuzz mint (SPL): shared mint for every generated token account.\n");
-    out.push_str(FUZZ_MINT_BLOCK);
+    if config.has_token_2022 {
+        out.push_str("    // Fuzz mint (Token-2022): shared mint for every generated token account,\n");
+    } else {
+        out.push_str("    // Fuzz mint (SPL): shared mint for every generated token account,\n");
+    }
+    out.push_str("    // registered ONCE at the resolved mint address: the first mint-named\n");
+    out.push_str("    // instruction account (e.g. `mint`), else `account_address(\"fuzz_mint\", ...)`,\n");
+    out.push_str("    // so token accounts reference this same address and mint consistency holds\n");
+    out.push_str("    // (from.mint == mint) even for programs that pass their own mint account.\n");
+    if mint_account.is_none() {
+        if config.has_token_2022 {
+            out.push_str(&format!(
+                "    token2022_accounts::seed_fuzz_mint(program_test, &{mint_address_expr}, payer);\n"
+            ));
+        } else {
+            out.push_str(FUZZ_MINT_BLOCK);
+        }
+    }
     if accounts.is_empty() {
         out.push_str("    // No other non-signer IDL accounts to seed.\n");
         return out;
@@ -901,7 +1010,30 @@ fn render_seed_accounts(config: &FuzzerConfig) -> String {
     if uses_rng {
         out.push_str("    let mut rng = rand::thread_rng();\n");
     }
-    for (name, (address_expr, data_expr, owner_expr)) in &accounts {
+    for (name, (address_expr, kind)) in &accounts {
+        if config.has_token_2022 && matches!(kind, AccountSeedKind::Token | AccountSeedKind::Mint) {
+            if matches!(kind, AccountSeedKind::Token) {
+                out.push_str(&format!(
+                    "    // {name}\n    token2022_accounts::seed_token_account(program_test, &{address_expr}, &{mint_address_expr}, payer, 1_000_000_000_000);\n"
+                ));
+            } else {
+                out.push_str(&format!(
+                    "    // {name}\n    token2022_accounts::seed_fuzz_mint(program_test, &{address_expr}, payer);\n"
+                ));
+            }
+            continue;
+        }
+        let (data_expr, owner_expr) = match kind {
+            AccountSeedKind::Token => {
+                (TOKEN_ACCOUNT_DATA.replace("{mint_address_expr}", &mint_address_expr), "spl_token::ID".to_string())
+            }
+            AccountSeedKind::Mint => (MINT_ACCOUNT_DATA.to_string(), "spl_token::ID".to_string()),
+            AccountSeedKind::Typed(build_fn) => (format!("accounts::{build_fn}(&mut rng)"), "program_id()".to_string()),
+            AccountSeedKind::Placeholder => (
+                "/* unknown account type — placeholder data, wire manually */ vec![0; 1024]".to_string(),
+                "program_id()".to_string(),
+            ),
+        };
         out.push_str(&format!(
             "    // {name}\n    program_test.add_account(\n        {address_expr},\n        Account {{\n            lamports: 10_000_000,\n            data: {data_expr},\n            owner: {owner_expr},\n            executable: false,\n            rent_epoch: 0,\n        }},\n    );\n"
         ));
@@ -1232,6 +1364,7 @@ mod tests {
             account_types: vec![],
             has_vault: false,
             has_token: false,
+            has_token_2022: false,
             has_state_init_flag: false,
         }
     }
@@ -1252,6 +1385,140 @@ mod tests {
         let pda_setup = fuzzer_seeds::render_pda_setup(&idl);
         let signer_info = fuzzer_seeds::render_signer_info(&idl);
         (config_from_idl(idl), layout, pda_setup, signer_info)
+    }
+
+    /// Parses the token-2022 fixture and renders the config plus the three
+    /// generated modules exactly as `fuzzer::init` does for an IDL-bearing
+    /// workspace. `config_from_idl` sets `has_token_2022` via the IDL
+    /// account-name fallback (`token_2022_program`).
+    fn token2022_fixture() -> (FuzzerConfig, String, String, String) {
+        let idl = idl::parse_idl("tests/fixtures/token2022_fuzz.json").expect("parse token2022_fuzz fixture");
+        let layout = fuzzer_layout::render_account_factories(&idl);
+        let pda_setup = fuzzer_seeds::render_pda_setup(&idl);
+        let signer_info = fuzzer_seeds::render_signer_info(&idl);
+        (config_from_idl(idl), layout, pda_setup, signer_info)
+    }
+
+    #[test]
+    fn token2022_mode_embeds_extension_factories() {
+        let (config, layout, pda_setup, signer_info) = token2022_fixture();
+        assert!(config.has_token_2022, "fixture must be detected as token-2022");
+        let rendered = render_lib_rs(&config, &layout, &pda_setup, &signer_info);
+
+        for needle in [
+            "// Generated token-2022 account factories",
+            "pub mod token2022_accounts",
+            "TransferFeeConfig",
+            "InterestBearingConfig",
+            "PermanentDelegate",
+            "spl_token_2022::ID",
+        ] {
+            assert!(rendered.contains(needle), "missing {needle:?} in rendered lib.rs");
+        }
+        // The fixture's `mint` account is the resolved mint and is seeded as a
+        // Token-2022 extension mint at its own address.
+        assert!(rendered.contains(
+            "token2022_accounts::seed_fuzz_mint(program_test, &account_address(\"mint\", payer, signer_pubkeys), payer)"
+        ));
+
+        // The entire rendered lib.rs must parse as valid Rust.
+        syn::parse_file(&rendered)
+            .unwrap_or_else(|err| panic!("rendered lib.rs does not parse: {err}\n---\n{rendered}"));
+    }
+
+    #[test]
+    fn spl_token_mode_omits_extension_factories() {
+        let (mut config, layout, pda_setup, signer_info) = token2022_fixture();
+        config.has_token_2022 = false;
+        let rendered = render_lib_rs(&config, &layout, &pda_setup, &signer_info);
+
+        for needle in ["// Generated token-2022 account factories", "pub mod token2022_accounts", "TransferFeeConfig"] {
+            assert!(!rendered.contains(needle), "unexpected {needle:?} in spl-token-mode lib.rs");
+        }
+        assert!(rendered.contains("spl_token::ID"), "spl-token factories must still be emitted");
+        syn::parse_file(&rendered)
+            .unwrap_or_else(|err| panic!("rendered lib.rs does not parse: {err}\n---\n{rendered}"));
+    }
+
+    #[test]
+    fn detects_token_2022_from_program_cargo_toml() {
+        let dir = tempdir().expect("tempdir");
+        let toml_path = dir.path().join("Cargo.toml");
+
+        // [dependencies] key (plain version string).
+        fs::write(&toml_path, "[dependencies]\nspl-token-2022 = \"7\"\n").expect("write temp Cargo.toml");
+        assert!(program_has_token_2022(&toml_path), "spl-token-2022 in [dependencies]");
+
+        // [workspace.dependencies] key, alternate spelling.
+        fs::write(&toml_path, "[workspace.dependencies]\ntoken-2022 = { version = \"7\" }\n")
+            .expect("write temp Cargo.toml");
+        assert!(program_has_token_2022(&toml_path), "token-2022 in [workspace.dependencies]");
+
+        // No token-2022 dependency → false.
+        fs::write(&toml_path, "[dependencies]\nspl-token = \"7\"\nanchor-lang = \"0.30\"\n")
+            .expect("write temp Cargo.toml");
+        assert!(!program_has_token_2022(&toml_path), "spl-token alone must not match");
+
+        // Unreadable path → false.
+        assert!(!program_has_token_2022(&dir.path().join("nope").join("Cargo.toml")));
+    }
+
+    #[test]
+    fn detects_token_2022_from_idl_account_names() {
+        let idl = idl::parse_idl("tests/fixtures/token2022_fuzz.json").expect("parse token2022_fuzz fixture");
+        let config = config_from_idl(idl);
+        assert!(config.has_token_2022, "`token_2022_program` account name must trigger the IDL-name fallback");
+
+        // Negative control: fixtures without a "2022" account name stay spl-token.
+        let vault = idl::parse_idl("tests/fixtures/vault.json").expect("parse vault fixture");
+        assert!(!config_from_idl(vault).has_token_2022);
+    }
+
+    #[test]
+    fn token_accounts_reference_resolved_mint() {
+        // A transfer-style instruction with its own `mint` account: token
+        // accounts and the fuzz mint must resolve to the mint account's
+        // address (not the `fuzz_mint` fallback), so from.mint == mint holds.
+        let config = test_config(vec![FuzzerInstructionConfig {
+            name: "transfer".to_string(),
+            accounts: vec![
+                FuzzerAccountConfig { name: "token_account".to_string(), is_mut: true, is_signer: false, pda: false },
+                FuzzerAccountConfig { name: "mint".to_string(), is_mut: false, is_signer: false, pda: false },
+            ],
+            args: vec![],
+        }]);
+
+        let rendered = render_seed_accounts(&config);
+        // The resolved-mint rule is documented in the generated code.
+        assert!(rendered.contains("resolved mint"), "missing resolved-mint comment:\n{rendered}");
+        // The mint is registered once at the mint account's address, and the
+        // token account data references that same address — never the fallback.
+        assert!(
+            rendered.contains("mint: account_address(\"mint\", payer, signer_pubkeys)"),
+            "token account must reference the resolved mint:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("account_address(\"fuzz_mint\", payer, signer_pubkeys)"),
+            "fuzz_mint fallback must not appear when the program passes its own mint:\n{rendered}"
+        );
+
+        // Token-2022 mode: the same resolved-mint rule through the factories.
+        let mut token_2022 = config.clone();
+        token_2022.has_token_2022 = true;
+        let rendered = render_seed_accounts(&token_2022);
+        assert!(rendered.contains("resolved mint"));
+        assert!(rendered.contains(
+            "token2022_accounts::seed_token_account(program_test, &account_address(\"token_account\", payer, signer_pubkeys), &account_address(\"mint\", payer, signer_pubkeys), payer, 1_000_000_000_000)"
+        ));
+        assert!(rendered.contains(
+            "token2022_accounts::seed_fuzz_mint(program_test, &account_address(\"mint\", payer, signer_pubkeys), payer)"
+        ));
+        assert!(!rendered.contains("account_address(\"fuzz_mint\", payer, signer_pubkeys)"));
+
+        // Without a mint-named account, the fuzz_mint fallback is still used.
+        let plain = render_seed_accounts(&test_config(vec![]));
+        assert!(plain.contains("account_address(\"fuzz_mint\", payer, signer_pubkeys)"), "{plain}");
+        assert!(plain.contains("resolved mint"), "{plain}");
     }
 
     #[test]
