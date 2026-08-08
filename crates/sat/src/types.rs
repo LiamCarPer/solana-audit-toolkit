@@ -59,6 +59,8 @@ impl Finding {
             || title.contains("writable sysvar")
             || title.contains("missing owner constraint")
             || title.contains("missing signer")
+            || title.contains("token transfer cpi")
+            || title.contains("manual deserialization")
         {
             return Confidence::High;
         }
@@ -69,6 +71,7 @@ impl Finding {
             || title.contains("missing `mut`")
             || title.contains("serialization mismatch")
             || title.contains("reinitialization risk")
+            || title.contains("init_if_needed")
             || title.contains("token-2022")
             || title.contains("transfer fee")
             || title.contains("permanent delegate")

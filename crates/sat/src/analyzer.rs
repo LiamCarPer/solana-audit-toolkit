@@ -14,6 +14,7 @@ use crate::token2022;
 use crate::types::{Finding, Severity};
 use crate::ui;
 
+use crate::{deserialization, init_guard, token_cpi};
 use crate::{render, serialization, sysvar, tx_report};
 
 // ── Analysis data structures ──────────────────────────────────────────────────
@@ -1539,6 +1540,9 @@ pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&st
     all_findings.extend(sysvar::check_sysvar_misuse(&parsed_files, &all_accounts));
     all_findings.extend(serialization::check_serialization_mismatch(&parsed_files));
     all_findings.extend(pda::check_pda_seed_mismatch(&all_accounts, idl.as_ref(), &parsed_files));
+    all_findings.extend(init_guard::check_init_if_needed(&all_accounts, &parsed_files));
+    all_findings.extend(token_cpi::check_token_cpi(&all_accounts, &parsed_files));
+    all_findings.extend(deserialization::check_manual_deserialization(&all_accounts, &parsed_files));
     all_findings.extend(token2022::analyze(&src_path, &parsed_files, &all_accounts));
 
     if let Some(report_path) = tx_report {
@@ -1604,6 +1608,9 @@ pub fn analyze_string_for_test(source: &str) -> (Vec<AccountsStruct>, Vec<Source
     findings.extend(sysvar::check_sysvar_misuse(&parsed_files, &accounts));
     findings.extend(serialization::check_serialization_mismatch(&parsed_files));
     findings.extend(pda::check_pda_seed_mismatch(&accounts, None, &parsed_files));
+    findings.extend(init_guard::check_init_if_needed(&accounts, &parsed_files));
+    findings.extend(token_cpi::check_token_cpi(&accounts, &parsed_files));
+    findings.extend(deserialization::check_manual_deserialization(&accounts, &parsed_files));
     findings.extend(token2022::detect_interface_account(&accounts));
     dedupe_findings(&mut findings);
     for (i, f) in findings.iter_mut().enumerate() {

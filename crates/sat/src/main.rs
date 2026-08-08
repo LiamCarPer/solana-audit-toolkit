@@ -3,8 +3,10 @@ use clap::{Parser, Subcommand};
 
 mod analyzer;
 mod cpi;
+mod deserialization;
 mod fuzzer;
 mod idl;
+mod init_guard;
 mod pda;
 mod render;
 mod reporter;
@@ -12,6 +14,7 @@ mod sarif;
 mod serialization;
 mod sysvar;
 mod token2022;
+mod token_cpi;
 mod tx_report;
 mod types;
 mod ui;

@@ -46,6 +46,9 @@ Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` 
 - **Sysvar misuse** — instructions calling `Clock::get()`, `Rent::get()`, etc. without declaring the sysvar account, and sysvars incorrectly marked writable
 - **Serialization mismatch** — field width differences between `#[account]` storage structs and instruction argument structs (e.g. `u32` in args, `u64` on-chain)
 - **PDA seed cross-check** — compares IDL-declared PDA seeds against `#[account(seeds = ...)]` constraints and flags divergences that enable account substitution
+- **Init-if-needed audit** — flags authority-bearing accounts using `#[account(init_if_needed, ...)]` without an initialization guard; a front-running class where an attacker can initialize the account first with their own authority
+- **Token-CPI authority verification** — `transfer` / `set_authority` CPIs whose authority account is not constrained as a signer
+- **Manual deserialization audit** — account data deserialized from raw bytes without owner or discriminator validation
 
 **Token-2022:**
 - Detects usage via program ID, `Cargo.toml` dependency, and `InterfaceAccount<TokenAccount>` / `InterfaceAccount<Mint>` types
@@ -90,6 +93,8 @@ Interactive CLI to create structured markdown audit findings with YAML front-mat
 
 See `docs/BUG_BOUNTY_WORKFLOW.md` for the recommended loop: triage, manual verification, PoC construction, false-positive control, and fuzzer follow-up.
 
+**Bounty-finder checks:** the init-if-needed, token-CPI, and manual-deserialization audits target exploit classes tracked in `docs/EXPLOIT_CORPUS.md` — the corpus maps each finding class to the bounty root cause it enables.
+
 ## Shipped Audit Findings
 
 The `audit-findings/` directory contains three pre-written vulnerability analyses that demonstrate the toolkit's capabilities:
@@ -119,10 +124,13 @@ sat analyze src crates/sat/src --format sarif
 │   ├── render.rs             Terminal output rendering
 │   ├── sysvar.rs             Sysvar misuse detection
 │   ├── serialization.rs      Borsh/Anchor field width comparison
+│   ├── deserialization.rs     Manual deserialization audit
 │   ├── tx_report.rs          Cross-tool transaction correlation
 │   ├── cpi.rs                CPI depth tracking
 │   ├── idl.rs                IDL parsing + state transition analysis
+│   ├── init_guard.rs         Init-if-needed audit
 │   ├── token2022.rs          Token-2022 detection + auditing
+│   ├── token_cpi.rs          Token-CPI authority verification
 │   ├── reporter.rs           Interactive finding generator
 │   ├── fuzzer.rs             Fuzz harness generation
 │   ├── pda.rs                PDA seed cross-check (IDL vs. Anchor constraints)
@@ -135,6 +143,9 @@ sat analyze src crates/sat/src --format sarif
 │   ├── ast_analysis.rs       43 tests (signer, owner, mut, seeds, CEI, closing, SARIF)
 │   ├── cei_analysis.rs       9 tests (CEI ordering incl. nested blocks)
 │   ├── pda_seed_analysis.rs  6 tests (PDA seed cross-check)
+│   ├── init_guard_analysis.rs      Init-if-needed audit tests
+│   ├── token_cpi_analysis.rs       Token-CPI authority verification tests
+│   ├── deserialization_analysis.rs Manual deserialization audit tests
 │   ├── sarif_rules.rs        5 tests (SARIF rule classification)
 │   └── fixtures/             IDL JSON + Anchor Rust fixtures
 ├── audit-findings/            Pre-shipped finding writeups

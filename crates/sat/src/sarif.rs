@@ -116,6 +116,9 @@ const RULES: &[(&str, &str, &str)] = &[
         "PDA Seed Mismatch",
         "Runtime PDA seeds diverge from IDL-declared seeds, enabling account substitution.",
     ),
+    ("SAT016", "Init-if-Needed Risk", "Authority-bearing account uses init_if_needed without an initialization guard."),
+    ("SAT017", "Token-CPI Authority", "Token transfer/set_authority CPI uses an authority not constrained as signer."),
+    ("SAT018", "Manual Deserialization", "Account data deserialized without owner or discriminator validation."),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -214,7 +217,17 @@ pub fn export_sarif(findings: &[Finding], _program_name: &str, output_path: &str
 }
 
 fn classify_finding_rule(finding: &Finding) -> String {
-    if finding.title.contains("Missing Signer") {
+    // Ordering is load-bearing: these titles also contain substrings matched by
+    // older arms below (e.g. "Reinitialization Risk" would hit SAT005, and
+    // "Token Transfer CPI" titles mention Token-2022 ops), so they must be
+    // classified before the broader arms.
+    if finding.title.contains("init_if_needed") {
+        "SAT016".to_string()
+    } else if finding.title.contains("Token Transfer CPI") {
+        "SAT017".to_string()
+    } else if finding.title.contains("Manual Deserialization") {
+        "SAT018".to_string()
+    } else if finding.title.contains("Missing Signer") {
         "SAT001".to_string()
     } else if finding.title.contains("Missing Owner") {
         "SAT002".to_string()

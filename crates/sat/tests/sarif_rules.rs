@@ -1,9 +1,11 @@
 //! Integration tests for SARIF rule classification.
 //!
 //! Verifies that finding titles map to the intended SARIF rules (SAT014 for
-//! CEI violations, SAT015 for PDA seed mismatches) and that existing rules
-//! still classify correctly. Output paths use `tempfile::tempdir()` so the
-//! tests pass on Windows (no hardcoded `/tmp` paths).
+//! CEI violations, SAT015 for PDA seed mismatches, SAT016 for init-if-needed
+//! risk, SAT017 for token-CPI authorities, SAT018 for manual deserialization)
+//! and that existing rules still classify correctly. Output paths use
+//! `tempfile::tempdir()` so the tests pass on Windows (no hardcoded `/tmp`
+//! paths).
 
 use std::fs;
 
@@ -82,10 +84,49 @@ fn severity_levels_map_to_sarif_levels() {
 }
 
 #[test]
-fn rules_table_declares_sat014_and_sat015() {
+fn init_if_needed_maps_to_sat016_error() {
+    let parsed = export_and_parse(&[finding(
+        "Reinitialization Risk: `Initialize::state` uses init_if_needed on authority-bearing account `State` without an initialization guard",
+        Severity::High,
+    )]);
+
+    let result = &parsed["runs"][0]["results"][0];
+    assert_eq!(result["ruleId"], "SAT016");
+    assert_eq!(result["level"], "error");
+}
+
+#[test]
+fn token_transfer_cpi_maps_to_sat017_error() {
+    let parsed = export_and_parse(&[finding(
+        "Token Transfer CPI: `transfer` calls `spl_token::transfer` with authority `Transfer::authority` not constrained as signer",
+        Severity::High,
+    )]);
+
+    let result = &parsed["runs"][0]["results"][0];
+    assert_eq!(result["ruleId"], "SAT017");
+    assert_eq!(result["level"], "error");
+}
+
+#[test]
+fn manual_deserialization_maps_to_sat018_error() {
+    let parsed = export_and_parse(&[finding(
+        "Manual Deserialization: `Parse::data` data is deserialized from raw bytes without owner or discriminator validation",
+        Severity::High,
+    )]);
+
+    let result = &parsed["runs"][0]["results"][0];
+    assert_eq!(result["ruleId"], "SAT018");
+    assert_eq!(result["level"], "error");
+}
+
+#[test]
+fn rules_table_declares_sat014_through_sat018() {
     let parsed = export_and_parse(&[]);
     let rules = parsed["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
-    assert_eq!(rules.len(), 15, "SAT001..SAT015 should all be declared");
+    assert_eq!(rules.len(), 18, "SAT001..SAT018 should all be declared");
     assert!(rules.iter().any(|r| r["id"] == "SAT014"));
     assert!(rules.iter().any(|r| r["id"] == "SAT015"));
+    assert!(rules.iter().any(|r| r["id"] == "SAT016"));
+    assert!(rules.iter().any(|r| r["id"] == "SAT017"));
+    assert!(rules.iter().any(|r| r["id"] == "SAT018"));
 }

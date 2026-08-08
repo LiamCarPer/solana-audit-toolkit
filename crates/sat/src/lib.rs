@@ -1,7 +1,9 @@
 pub mod analyzer;
 pub mod cpi;
+pub mod deserialization;
 pub mod fuzzer;
 pub mod idl;
+pub mod init_guard;
 pub mod pda;
 pub mod render;
 pub mod reporter;
@@ -9,6 +11,7 @@ pub mod sarif;
 pub mod serialization;
 pub mod sysvar;
 pub mod token2022;
+pub mod token_cpi;
 pub mod tx_report;
 pub mod types;
 pub mod ui;
