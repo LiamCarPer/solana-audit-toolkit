@@ -682,11 +682,10 @@ fn field_inner_account_type(field: &AccountField) -> Option<String> {
 
     let inner = if let Some(stripped) = ty.strip_prefix(account_prefix) {
         stripped.strip_suffix('>').unwrap_or(stripped)
-    } else if let Some(start) = ty.find("Account<") {
+    } else {
+        let start = ty.find("Account<")?;
         let stripped = &ty[start + account_prefix.len()..];
         stripped.strip_suffix('>').unwrap_or(stripped)
-    } else {
-        return None;
     };
 
     inner.split(',').next_back().map(|part| part.trim().to_string()).filter(|part| !part.is_empty())
