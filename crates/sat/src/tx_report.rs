@@ -46,6 +46,12 @@ struct TxReportPda {
     bump: Option<u8>,
 }
 
+/// Normalize names for comparison: Anchor IDL instruction names are
+/// snake_case while `#[derive(Accounts)]` struct names are PascalCase.
+fn normalize_name(s: &str) -> String {
+    s.to_lowercase().replace('_', "")
+}
+
 pub fn check_tx_report_correlation(accounts: &[AccountsStruct], tx_report_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
 
@@ -79,17 +85,21 @@ pub fn check_tx_report_correlation(accounts: &[AccountsStruct], tx_report_path: 
         }
     };
 
-    let accounts_map: HashMap<String, &AccountsStruct> = accounts.iter().map(|a| (a.name.to_lowercase(), a)).collect();
+    let accounts_map: HashMap<String, &AccountsStruct> =
+        accounts.iter().map(|a| (normalize_name(&a.name), a)).collect();
 
     for tx_ix in &report.instructions {
-        let ix_name_lower = tx_ix.name.to_lowercase();
+        let ix_name = normalize_name(&tx_ix.name);
+        if ix_name.is_empty() {
+            // No usable instruction name — correlation cannot match.
+            continue;
+        }
 
         let matching_accts: Vec<&&AccountsStruct> = accounts_map
             .values()
             .filter(|accts| {
-                accts.name.to_lowercase() == ix_name_lower
-                    || ix_name_lower.ends_with(&accts.name.to_lowercase())
-                    || accts.name.to_lowercase().ends_with(&ix_name_lower)
+                let accts_name = normalize_name(&accts.name);
+                accts_name == ix_name || ix_name.ends_with(&accts_name) || accts_name.ends_with(&ix_name)
             })
             .collect();
 
@@ -99,8 +109,11 @@ pub fn check_tx_report_correlation(accounts: &[AccountsStruct], tx_report_path: 
 
         for &accts in &matching_accts {
             for tx_acct in &tx_ix.accounts {
-                let tx_name_lower = tx_acct.name.to_lowercase();
-                if let Some(field) = accts.fields.iter().find(|f| f.name.to_lowercase() == tx_name_lower) {
+                let tx_name = normalize_name(&tx_acct.name);
+                if tx_name.is_empty() {
+                    continue;
+                }
+                if let Some(field) = accts.fields.iter().find(|f| normalize_name(&f.name) == tx_name) {
                     if field.has_signer && !tx_acct.is_signer {
                         findings.push(Finding {
                             id: String::new(),

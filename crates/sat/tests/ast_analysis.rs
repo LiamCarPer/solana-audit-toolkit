@@ -942,7 +942,7 @@ pub struct TransferTokens<'info> {
             "program_name": "test",
             "instructions": [
                 {
-                    "name": "TransferTokens",
+                    "name": "transfer_tokens",
                     "accounts": [
                         {"name": "from", "is_signer": false, "is_writable": true},
                         {"name": "authority", "is_signer": false, "is_writable": false}
