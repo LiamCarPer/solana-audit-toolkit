@@ -8,6 +8,7 @@ use walkdir::WalkDir;
 
 use crate::cpi;
 use crate::idl::{self, IdlJson};
+use crate::native;
 use crate::pda;
 use crate::sarif;
 use crate::token2022;
@@ -1583,6 +1584,7 @@ pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&st
     all_findings.extend(token_cpi::check_token_cpi(&all_accounts, &parsed_files));
     all_findings.extend(deserialization::check_manual_deserialization(&all_accounts, &parsed_files));
     all_findings.extend(token2022::analyze(&src_path, &parsed_files, &all_accounts));
+    all_findings.extend(native::analyze(&parsed_files));
 
     if let Some(report_path) = tx_report {
         all_findings.extend(tx_report::check_tx_report_correlation(&all_accounts, report_path));

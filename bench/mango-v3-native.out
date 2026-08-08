@@ -1,0 +1,238 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench/programs/mango-v3/program/src
+  --- Scanning 11 source file(s)...
+
+┌
+├─ Accounts Structs
+  WARN No `#[derive(Accounts)]` structs found in the source.
+
+┌
+├─ Findings
+#1 [HIGH] Unverified Owner Account: `token_account_ai`
+  at bench/programs/mango-v3/program/src\processor.rs:8274 (RecoveryWithdrawTokenVault)
+  confidence: Low
+
+  The account `token_account_ai` carries state or is written by instruction `RecoveryWithdrawTokenVault` but is never checked against the program's owner (`owner_checked = false`) and its key is not pinned (`key_checked = false`). Any account owned by any program can be passed here, so data the program treats as its own state can be substituted with an attacker-crafted account owned by a malicious program. Exploit: supply a look-alike account owned by a program the attacker controls, with forged data, and the program's discriminator/state checks operate on attacker-controlled bytes.
+
+  Suggestion:
+  Add an owner check before reading or writing the account, e.g. `if token_account_ai.owner != program_id { return Err(ProgramError::IllegalOwner); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#2 [HIGH] Unverified Owner Account: `token_account_ai`
+  at bench/programs/mango-v3/program/src\processor.rs:8278 (RecoveryWithdrawMngoVault)
+  confidence: Low
+
+  The account `token_account_ai` carries state or is written by instruction `RecoveryWithdrawMngoVault` but is never checked against the program's owner (`owner_checked = false`) and its key is not pinned (`key_checked = false`). Any account owned by any program can be passed here, so data the program treats as its own state can be substituted with an attacker-crafted account owned by a malicious program. Exploit: supply a look-alike account owned by a program the attacker controls, with forged data, and the program's discriminator/state checks operate on attacker-controlled bytes.
+
+  Suggestion:
+  Add an owner check before reading or writing the account, e.g. `if token_account_ai.owner != program_id { return Err(ProgramError::IllegalOwner); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#3 [HIGH] Unverified Owner Account: `token_account_ai`
+  at bench/programs/mango-v3/program/src\processor.rs:8282 (RecoveryWithdrawInsuranceVault)
+  confidence: Low
+
+  The account `token_account_ai` carries state or is written by instruction `RecoveryWithdrawInsuranceVault` but is never checked against the program's owner (`owner_checked = false`) and its key is not pinned (`key_checked = false`). Any account owned by any program can be passed here, so data the program treats as its own state can be substituted with an attacker-crafted account owned by a malicious program. Exploit: supply a look-alike account owned by a program the attacker controls, with forged data, and the program's discriminator/state checks operate on attacker-controlled bytes.
+
+  Suggestion:
+  Add an owner check before reading or writing the account, e.g. `if token_account_ai.owner != program_id { return Err(ProgramError::IllegalOwner); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#4 [HIGH] Unsafe Arithmetic: `-=` in `apply_fees` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\matching.rs:2169 (apply_fees)
+  confidence: Medium
+
+  The expression `Expr::Index { attrs: [], expr: Expr::Field { attrs: [], base: Expr::Path { attrs: [], qself: None, path: Path { leading_colon: None, segments: [PathSegment { ident: Ident { sym: mango_account, span: bytes(223968..223981) }, arguments: PathArguments::None }] } }, dot_token: Dot, member: Member::Named(Ident { sym: perp_accounts, span: bytes(223982..223995) }) }, bracket_token: Bracket, index: Expr::Path { attrs: [], qself: None, path: Path { leading_colon: None, segments: [PathSegment { ident: Ident { sym: market_index, span: bytes(223996..224008) }, arguments: PathArguments::None }] } } }.quote_position` uses `-=` on a field in `apply_fees`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_sub()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_sub(amount).ok_or(Error::Underflow)?` or `.checked_sub(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#5 [HIGH] Unsafe Arithmetic: `+=` in `apply_fees` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\matching.rs:2170 (apply_fees)
+  confidence: Medium
+
+  The expression `market.fees_accrued` uses `+=` on a field in `apply_fees`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_add()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_add(amount).ok_or(Error::Underflow)?` or `.checked_add(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#6 [HIGH] Unsafe Arithmetic: `-=` in `apply_fees` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\matching.rs:2181 (apply_fees)
+  confidence: Medium
+
+  The expression `Expr::Index { attrs: [], expr: Expr::Field { attrs: [], base: Expr::Path { attrs: [], qself: None, path: Path { leading_colon: None, segments: [PathSegment { ident: Ident { sym: mango_account, span: bytes(224515..224528) }, arguments: PathArguments::None }] } }, dot_token: Dot, member: Member::Named(Ident { sym: perp_accounts, span: bytes(224529..224542) }) }, bracket_token: Bracket, index: Expr::Path { attrs: [], qself: None, path: Path { leading_colon: None, segments: [PathSegment { ident: Ident { sym: market_index, span: bytes(224543..224555) }, arguments: PathArguments::None }] } } }.quote_position` uses `-=` on a field in `apply_fees`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_sub()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_sub(amount).ok_or(Error::Underflow)?` or `.checked_sub(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#7 [HIGH] Unsafe Arithmetic: `+=` in `apply_fees` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\matching.rs:2182 (apply_fees)
+  confidence: Medium
+
+  The expression `market.fees_accrued` uses `+=` on a field in `apply_fees`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_add()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_add(amount).ok_or(Error::Underflow)?` or `.checked_add(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#8 [HIGH] Unsafe Arithmetic: `+` in `apply_fees` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\matching.rs:2182 (apply_fees)
+  confidence: Medium
+
+  The expression `taker_fees` uses `+` on a field in `apply_fees`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_add()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Use `checked_add()` instead of the raw operator.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#9 [HIGH] Unsafe Arithmetic: `+=` in `verify_bookside_iteration` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\matching.rs:2259 (verify_bookside_iteration)
+  confidence: Medium
+
+  The expression `total` uses `+=` on a field in `verify_bookside_iteration`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_add()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_add(amount).ok_or(Error::Underflow)?` or `.checked_add(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#10 [HIGH] Unsafe Arithmetic: `/` in `checked_add_net` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\processor.rs:8616 (checked_add_net)
+  confidence: Medium
+
+  The expression `native_quantity` uses `/` on a field in `checked_add_net`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_div()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Use `checked_div()` instead of the raw operator.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#11 [HIGH] Unsafe Arithmetic: `-=` in `checked_sub_net` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\processor.rs:8642 (checked_sub_net)
+  confidence: Medium
+
+  The expression `native_quantity` uses `-=` on a field in `checked_sub_net`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_sub()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_sub(amount).ok_or(Error::Underflow)?` or `.checked_sub(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#12 [HIGH] Unsafe Arithmetic: `+=` in `cancel_all_advanced_orders` — use checked_*() instead
+  at bench/programs/mango-v3/program/src\processor.rs:9056 (cancel_all_advanced_orders)
+  confidence: Medium
+
+  The expression `total_fee` uses `+=` on a field in `cancel_all_advanced_orders`. In release mode (optimized builds), Rust arithmetic wraps on overflow instead of panicking. Use `checked_add()`, or `overflow-checks = true` instead.
+
+  Suggestion:
+  Replace with `.checked_add(amount).ok_or(Error::Underflow)?` or `.checked_add(amount).ok_or(Error::Overflow)?`.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#13 [MEDIUM] Unsafe Multiplication: possible overflow in `apply_fees`
+  at bench/programs/mango-v3/program/src\matching.rs:2145 (apply_fees)
+  confidence: Medium
+
+  The expression `taker_quote_native` in `apply_fees` may overflow if both operands are large. Use `checked_mul()` and chain with `checked_div()`.
+
+  Suggestion:
+  Use `.checked_mul(other)?.checked_div(10000)?` for fee calculations, or upcast to u128 for intermediate results.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#14 [MEDIUM] Unsafe Multiplication: possible overflow in `apply_fees`
+  at bench/programs/mango-v3/program/src\matching.rs:2178 (apply_fees)
+  confidence: Medium
+
+  The expression `taker_quote_native` in `apply_fees` may overflow if both operands are large. Use `checked_mul()` and chain with `checked_div()`.
+
+  Suggestion:
+  Use `.checked_mul(other)?.checked_div(10000)?` for fee calculations, or upcast to u128 for intermediate results.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#15 [MEDIUM] Unsafe Multiplication: possible overflow in `apply_fees`
+  at bench/programs/mango-v3/program/src\matching.rs:2180 (apply_fees)
+  confidence: Medium
+
+  The expression `taker_quote_native` in `apply_fees` may overflow if both operands are large. Use `checked_mul()` and chain with `checked_div()`.
+
+  Suggestion:
+  Use `.checked_mul(other)?.checked_div(10000)?` for fee calculations, or upcast to u128 for intermediate results.
+
+  Manual verification:
+  - Check whether overflow checks are enabled in the release profile.
+  - Trace attacker-controlled operands and account balance fields.
+  - Build a boundary-value PoC for underflow, overflow, or precision loss.
+
+#16 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 16 findings: [HIGH] 12 HIGH | [MED] 3 MEDIUM | [INFO] 1 INFO
+

@@ -10,6 +10,7 @@ mod fuzzer_seeds;
 mod fuzzer_token2022;
 mod idl;
 mod init_guard;
+mod native;
 mod pda;
 mod render;
 mod reporter;

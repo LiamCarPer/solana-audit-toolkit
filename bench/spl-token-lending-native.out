@@ -1,0 +1,28 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench/programs/solana-program-library/token-lending/program/src
+  --- Scanning 3 source file(s)...
+
+┌
+├─ Accounts Structs
+  WARN No `#[derive(Accounts)]` structs found in the source.
+
+┌
+├─ Findings
+#1 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 1 finding: [INFO] 1 INFO
+

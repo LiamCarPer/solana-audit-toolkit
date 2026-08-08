@@ -160,3 +160,53 @@ cargo run --quiet -- analyze src bench/programs/mango-v3/program/src            
 Target commit hashes: Cashio vulnerable `a51c3c59`, Cashio post-fix `3f2c353`,
 Anchor examples `474204e`, Mango v3 `c4d52dc`. Cloned repos live under
 `bench/programs/` (git-ignored); outputs are committed.
+
+---
+
+# Native backend benchmark (first run, 2026-08-08)
+
+The native (non-Anchor) backend shipped per `docs/NATIVE_BACKEND.md`: frontend
+(entrypoint/dispatch/account resolution) + 12 rules SAT019–SAT030. This is the
+first run against real native programs — the recall/precision numbers below are
+the honest baseline, including the false-positive patterns it surfaced.
+
+## Mango v3 (`c4d52dc`, audited, ~$114M exploit class documented in the corpus)
+
+Command: `sat analyze src bench/programs/mango-v3/program/src` → **16 findings**
+(12 HIGH, 3 MEDIUM, 1 INFO).
+
+| Finding | Count | Classification | Note |
+|---|---|---|---|
+| `Unverified Owner Account: token_account_ai` (SAT020) | 3 | **FP ×2 / PARTIAL ×1** | withdraw/withdraw2 pass the account only as the SPL token CPI destination — the token program validates ownership at runtime → FP. The liquidation delist path (`TokenAccount::load_checked`, processor.rs:7094) reads token data without an owner guard → genuine triage lead, manual confirmation required |
+| `Unsafe Arithmetic`/`Unsafe Multiplication` (SAT026) | 12 | **FP cluster** | All fire inside `apply_fees`, `checked_add_net`, `checked_sub_net`, `verify_bookside_iteration`, `cancel_all_advanced_orders` on **I80F48** — Mango's fixed-point type whose operators are internally checked (the function names literally say `checked_`) → the SAT012 port is type-blind and flags custom checked types. Documented FP pattern #1 |
+| INFO Token-2022 | 1 | informational | — |
+
+**Read of the run:** precision on unseen audited native code is dominated by two
+FP patterns, not by wrong leads. The single PARTIAL (delist-path token data read)
+is exactly the kind of lead the tool is meant to produce.
+
+## SPL token-lending (archived subrepo, audited)
+
+Command: `sat analyze src bench/programs/solana-program-library/token-lending/program/src`
+→ **0 findings**. The entrypoint engages (delegation chain to
+`processor::process_instruction`), dispatch uses `LendingInstruction::unpack`.
+Either genuinely clean (heavily audited) or below resolution depth — the
+unpack-based dispatch path is a documented frontend limitation to verify next.
+
+## Actions from this run (native)
+
+1. **FP pattern A — SAT020 on CPI-passed-only accounts:** accounts that are only
+   handed to a CPI whose callee (e.g. SPL token) validates them. Candidate fix:
+   track CPI-passed accounts and suppress when the callee program is a known
+   validating builtin.
+2. **FP pattern B — SAT026 type-blindness:** arithmetic on custom fixed-point
+   types (I80F48-style) is flagged. Candidate fix: skip non-primitive operand
+   types (the Anchor SAT012 has the same gap; fix both).
+3. **Frontend depth:** `LendingInstruction::unpack`-style dispatch may resolve to
+   fewer instructions than real — add instruction-count rendering for native
+   programs so engagement is visible in the text output.
+4. **R4 guard gap:** discriminator checks on deserialized locals
+   (`s.discriminator != ...`) are not counted as init guards — a real-code FP
+   source; enhancement pending in `rules/cpi.rs`.
+
+Raw outputs: `bench/mango-v3-native.out`, `bench/spl-token-lending-native.out`.

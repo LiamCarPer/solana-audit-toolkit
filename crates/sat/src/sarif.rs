@@ -119,6 +119,30 @@ const RULES: &[(&str, &str, &str)] = &[
     ("SAT016", "Init-if-Needed Risk", "Authority-bearing account uses init_if_needed without an initialization guard."),
     ("SAT017", "Token-CPI Authority", "Token transfer/set_authority CPI uses an authority not constrained as signer."),
     ("SAT018", "Manual Deserialization", "Account data deserialized without owner or discriminator validation."),
+    (
+        "SAT019",
+        "Unverified Signer Account",
+        "Native account used for privileged operations without an is_signer guard.",
+    ),
+    ("SAT020", "Unverified Owner Account", "Native account data read or written without an owner equality guard."),
+    ("SAT021", "Unchecked Authority Key", "Authority-named native account never compared to a stored or derived key."),
+    ("SAT022", "Seed Derivation Mismatch", "invoke_signed seeds differ from find_program_address seeds."),
+    ("SAT023", "State Write After CPI", "State written after an external call in a native handler."),
+    ("SAT024", "Account Reinit After Close", "Closed account rewritten without a re-initialization guard."),
+    (
+        "SAT025",
+        "Unchecked Deserialization",
+        "Native account data deserialized without owner or discriminator validation.",
+    ),
+    ("SAT026", "Unsafe Arithmetic", "Native arithmetic on security-sensitive values lacks checked operations."),
+    ("SAT027", "Writable Builtin Account", "Known program or sysvar account declared writable."),
+    ("SAT028", "Token CPI Unverified Authority", "Token CPI authority not constrained as signer or key-checked."),
+    ("SAT029", "Self-Invocation", "Program invokes itself via CPI."),
+    (
+        "SAT030",
+        "Cross-Instruction State Reuse",
+        "State account written by multiple instructions without an init guard.",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -217,11 +241,31 @@ pub fn export_sarif(findings: &[Finding], _program_name: &str, output_path: &str
 }
 
 fn classify_finding_rule(finding: &Finding) -> String {
-    // Ordering is load-bearing: these titles also contain substrings matched by
-    // older arms below (e.g. "Reinitialization Risk" would hit SAT005, and
-    // "Token Transfer CPI" titles mention Token-2022 ops), so they must be
-    // classified before the broader arms.
-    if finding.title.contains("init_if_needed") {
+    // Native-backend rules first: several older arms below are greedy
+    // (e.g. "Mismatch", "Sysvar") and would swallow the new titles.
+    if finding.title.contains("Unverified Signer Account") {
+        "SAT019".to_string()
+    } else if finding.title.contains("Unverified Owner Account") {
+        "SAT020".to_string()
+    } else if finding.title.contains("Unchecked Authority Key") {
+        "SAT021".to_string()
+    } else if finding.title.contains("Seed Derivation Mismatch") {
+        "SAT022".to_string()
+    } else if finding.title.contains("State Write After CPI") {
+        "SAT023".to_string()
+    } else if finding.title.contains("Account Reinit After Close") {
+        "SAT024".to_string()
+    } else if finding.title.contains("Unchecked Deserialization") {
+        "SAT025".to_string()
+    } else if finding.title.contains("Writable Builtin Account") {
+        "SAT027".to_string()
+    } else if finding.title.contains("Token CPI Unverified Authority") {
+        "SAT028".to_string()
+    } else if finding.title.contains("Self-Invocation") {
+        "SAT029".to_string()
+    } else if finding.title.contains("Cross-Instruction State Reuse") {
+        "SAT030".to_string()
+    } else if finding.title.contains("init_if_needed") {
         "SAT016".to_string()
     } else if finding.title.contains("Token Transfer CPI") {
         "SAT017".to_string()

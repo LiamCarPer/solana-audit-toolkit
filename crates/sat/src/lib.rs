@@ -7,6 +7,7 @@ pub mod fuzzer_seeds;
 pub mod fuzzer_token2022;
 pub mod idl;
 pub mod init_guard;
+pub mod native;
 pub mod pda;
 pub mod render;
 pub mod reporter;
