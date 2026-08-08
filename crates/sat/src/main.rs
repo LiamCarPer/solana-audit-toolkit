@@ -85,6 +85,9 @@ enum AnalyzeTarget {
         /// Path to transaction analysis report JSON for cross-tool correlation
         #[arg(long)]
         tx_report: Option<String>,
+        /// Export source-derived native account expectations to a JSON file (consumable by rts)
+        #[arg(long)]
+        expectations: Option<String>,
     },
 }
 
@@ -114,8 +117,8 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Analyze { target } => match target {
             AnalyzeTarget::Idl { path } => idl::run(path.as_deref()),
-            AnalyzeTarget::Src { path, format, triage, tx_report } => {
-                analyzer::run(path.as_deref(), &format, triage, tx_report.as_deref())
+            AnalyzeTarget::Src { path, format, triage, tx_report, expectations } => {
+                analyzer::run(path.as_deref(), &format, triage, tx_report.as_deref(), expectations.as_deref())
             }
         },
         Commands::Fuzz { action } => match action {

@@ -115,13 +115,14 @@ fn base_ident(e: &syn::Expr) -> Option<String> {
     }
 }
 
-/// Peel reference/paren/group/deref wrappers off an expression.
+/// Peel reference/paren/group/deref/try wrappers off an expression.
 fn peel(e: &syn::Expr) -> &syn::Expr {
     match e {
         syn::Expr::Reference(r) => peel(&r.expr),
         syn::Expr::Paren(p) => peel(&p.expr),
         syn::Expr::Group(g) => peel(&g.expr),
         syn::Expr::Unary(u) => peel(&u.expr),
+        syn::Expr::Try(t) => peel(&t.expr),
         _ => e,
     }
 }
@@ -920,14 +921,18 @@ fn is_stateish(account: &ResolvedAccount) -> bool {
 
 /// True when the handler expansion contains an init/discriminator guard for
 /// the account: `data_is_empty()`, a `data[0..8] == DISCRIMINATOR`-style
-/// comparison, an `is_initialized` flag check, or a `realloc`-on-account call.
-/// Presence-based and order-insensitive (same semantics as section 6).
+/// comparison, an `is_initialized` flag check, a `realloc`-on-account call,
+/// or a discriminator/init-field comparison on a local deserialized from the
+/// account's data (`let s = State::try_from_slice(&data)?;` then
+/// `s.discriminator != STATE_DISCRIMINATOR`). Presence-based and
+/// order-insensitive (same semantics as section 6).
 fn has_init_guard(blocks: &[(&syn::Block, usize)], acc: &str) -> bool {
     blocks.iter().any(|(block, _)| block_has_init_guard(block, acc))
 }
 
 fn block_has_init_guard(block: &syn::Block, acc: &str) -> bool {
     let derived = collect_derived_locals(block, acc);
+    let deser = collect_deserialized_locals(block, acc);
     let mut found = false;
     walk_block_all(
         block,
@@ -957,7 +962,9 @@ fn block_has_init_guard(block: &syn::Block, acc: &str) -> bool {
                 syn::Expr::Binary(b)
                     if matches!(b.op, syn::BinOp::Eq(_) | syn::BinOp::Ne(_))
                         && (is_discriminator_compare(&b.left, &b.right, acc, &derived)
-                            || is_discriminator_compare(&b.right, &b.left, acc, &derived)) =>
+                            || is_discriminator_compare(&b.right, &b.left, acc, &derived)
+                            || is_deser_field_compare(&b.left, &b.right, &deser)
+                            || is_deser_field_compare(&b.right, &b.left, &deser)) =>
                 {
                     found = true;
                 }
@@ -999,6 +1006,104 @@ fn expr_mentions_ident(e: &syn::Expr, ident: &str) -> bool {
         &mut |_| {},
     );
     found
+}
+
+/// Base account variable an expression ultimately derives from, following
+/// references/derefs, field and method access, indexing, and calls
+/// (`State::load(&state)` → `state`, `try_from_slice(&data)` → `data`).
+/// Struct-field access (`accs.state`) yields the field name (the model names
+/// struct-style accounts by their field); the AccountInfo members `key`/`data`
+/// resolve to the base account.
+fn expr_account_base(e: &syn::Expr) -> Option<String> {
+    match e {
+        syn::Expr::Reference(r) => expr_account_base(&r.expr),
+        syn::Expr::Paren(p) => expr_account_base(&p.expr),
+        syn::Expr::Group(g) => expr_account_base(&g.expr),
+        syn::Expr::Try(t) => expr_account_base(&t.expr),
+        syn::Expr::Unary(u) => expr_account_base(&u.expr),
+        syn::Expr::MethodCall(m) => expr_account_base(&m.receiver),
+        syn::Expr::Index(i) => expr_account_base(&i.expr),
+        syn::Expr::Field(f) => {
+            if let syn::Member::Named(member) = &f.member
+                && !matches!(member.to_string().as_str(), "key" | "data")
+                && matches!(&*f.base, syn::Expr::Path(_))
+            {
+                return Some(member.to_string());
+            }
+            expr_account_base(&f.base)
+        }
+        syn::Expr::Call(c) => c.args.first().and_then(expr_account_base),
+        syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+        _ => None,
+    }
+}
+
+/// True when the binding is a deserialization call on a byte slice
+/// (`try_from_slice`/`try_from_slice_unchecked`/`unpack`/`unpack_unchecked`).
+fn is_deserialization_call(e: &syn::Expr) -> bool {
+    let e = peel(e);
+    let syn::Expr::Call(c) = e else { return false };
+    let callee = expr_key(&c.func).unwrap_or_default();
+    let last = callee.rsplit("::").next().unwrap_or(&callee);
+    matches!(last, "try_from_slice" | "try_from_slice_unchecked" | "unpack" | "unpack_unchecked")
+}
+
+/// Locals deserialized from the account's data — `let s =
+/// State::try_from_slice(&data)?;` — resolved through `let` chains in source
+/// order (`let data = state.data.borrow();` / `let bytes = &data[..];` then
+/// the deserialization). Only the account whose data feeds the deserialization
+/// gets the guard attributed to it.
+///
+/// Resolution is deliberately single-pass and order-sensitive: a fixpoint
+/// would let a *later* shadowing binding (e.g. a second `let data = ...`
+/// bound from a different account) retroactively re-attribute earlier
+/// deserializations to the wrong account, which the per-account attribution
+/// requirement forbids. Shadowing with an account switch is a documented
+/// blind spot (the first attribution wins).
+fn collect_deserialized_locals(block: &syn::Block, acc: &str) -> HashSet<String> {
+    let mut from_acc: HashSet<String> = HashSet::new();
+    let mut deser: HashSet<String> = HashSet::new();
+    walk_block_all(block, &mut |_| {}, &mut |local| {
+        let Some(init) = &local.init else { return };
+        let syn::Pat::Ident(pat) = &local.pat else { return };
+        let name = pat.ident.to_string();
+        if from_acc.contains(&name) {
+            // Shadowed binding: keep the first attribution (conservative).
+            return;
+        }
+        let Some(base) = expr_account_base(&init.expr) else { return };
+        if base != acc && !from_acc.contains(&base) && !deser.contains(&base) {
+            return;
+        }
+        from_acc.insert(name.clone());
+        if is_deserialization_call(&init.expr) || deser.contains(&base) {
+            deser.insert(name);
+        }
+    });
+    deser
+}
+
+/// Discriminator/init fields of a deserialized state struct that identify
+/// whether the account was initialized.
+const DESER_FIELD_NAMES: [&str; 5] = ["discriminator", "version", "tag", "is_initialized", "state"];
+
+/// One side of a comparison is a discriminator/init field of a local
+/// deserialized from the account's data (`s.discriminator`, `s.version`,
+/// `s.tag`, `s.is_initialized`, `s.state`).
+fn is_deser_field(e: &syn::Expr, deser: &HashSet<String>) -> bool {
+    let e = peel(e);
+    let syn::Expr::Field(f) = e else { return false };
+    let syn::Member::Named(member) = &f.member else { return false };
+    if !DESER_FIELD_NAMES.contains(&member.to_string().as_str()) {
+        return false;
+    }
+    base_ident(&f.base).is_some_and(|b| deser.contains(&b))
+}
+
+/// `s.<field> ==/<!= <constant>` where `s` is a local deserialized from the
+/// account's data and the other side is a literal/array/constant path.
+fn is_deser_field_compare(a: &syn::Expr, b: &syn::Expr, deser: &HashSet<String>) -> bool {
+    is_deser_field(a, deser) && is_literal_like(b)
 }
 
 /// One side of a comparison is an index into the account's data

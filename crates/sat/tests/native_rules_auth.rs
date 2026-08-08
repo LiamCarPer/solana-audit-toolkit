@@ -166,6 +166,110 @@ fn clean_yields_no_authentication_findings() {
 // ── FP filters (inline sources) ─────────────────────────────────────────────
 
 #[test]
+fn cpi_passed_only_fixture_resolves_the_token_account() {
+    // Model sanity: the suppression test must not be vacuous — the account
+    // really is a stateful token account with no owner/key check.
+    let source = fixture_source("cpi_passed_only.rs");
+    let (program, _) = run_auth(&source);
+    assert_eq!(program.instructions.len(), 1);
+    let ix = &program.instructions[0];
+    assert_eq!(ix.accounts.len(), 3);
+    let ta = account(ix, "token_account");
+    assert_eq!(ta.kind, sat::native::model::AccountKind::TokenAccount);
+    assert!(!ta.owner_checked && !ta.key_checked, "SAT020 trigger conditions hold");
+}
+
+#[test]
+fn cpi_passed_only_token_account_is_not_reported() {
+    // SAT020 suppression: the account is only passed to an SPL Token
+    // `invoke_signed` (through a helper, like Mango's `invoke_transfer`); the
+    // token program validates ownership at runtime.
+    let (_, findings) = run_auth_fixture("cpi_passed_only.rs");
+    assert!(findings.is_empty(), "CPI-passed-only account must not fire SAT020: {findings:?}");
+}
+
+#[test]
+fn cpi_passed_only_control_with_data_read_is_reported() {
+    // Same shape plus a `try_from_slice` on the account's data: the data read
+    // is a program use, so SAT020 fires (delist-path shape).
+    let (_, findings) = run_auth_fixture("cpi_passed_only_control.rs");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].title.starts_with(SAT020), "{}", findings[0].title);
+    assert!(findings[0].title.contains("`token_account`"), "{}", findings[0].title);
+    assert_eq!(findings[0].severity, Severity::High);
+}
+
+#[test]
+fn cpi_to_unknown_program_is_reported() {
+    // Unknown callee: a dex-style invoke whose program_id is `dex_program.key`
+    // with no known-program check — the account must keep firing.
+    let src = r#"
+        use solana_program::{
+            account_info::{next_account_info, AccountInfo},
+            entrypoint,
+            entrypoint::ProgramResult,
+            instruction::{AccountMeta, Instruction},
+            program::invoke,
+            pubkey::Pubkey,
+        };
+        entrypoint!(process_instruction);
+        pub fn process_instruction(
+            _program_id: &Pubkey,
+            accounts: &[AccountInfo],
+            _instruction_data: &[u8],
+        ) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let dex_program = next_account_info(accounts_iter)?;
+            let token_account = next_account_info(accounts_iter)?;
+            let ix = Instruction {
+                program_id: *dex_program.key,
+                accounts: vec![AccountMeta::new(*token_account.key, false)],
+                data: vec![],
+            };
+            invoke(&ix, &[dex_program.clone(), token_account.clone()])
+        }
+    "#;
+    let (_, findings) = run_auth(src);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].title.starts_with(SAT020), "{}", findings[0].title);
+    assert_eq!(findings[0].severity, Severity::High);
+}
+
+#[test]
+fn cpi_with_token_program_base58_literal_is_not_reported() {
+    // The program id literal resolves to the SPL Token program: the account
+    // passed to this CPI is suppressed.
+    let src = r#"
+        use solana_program::{
+            account_info::{next_account_info, AccountInfo},
+            entrypoint,
+            entrypoint::ProgramResult,
+            instruction::Instruction,
+            program::invoke,
+            pubkey::Pubkey,
+        };
+        entrypoint!(process_instruction);
+        pub fn process_instruction(
+            _program_id: &Pubkey,
+            accounts: &[AccountInfo],
+            _instruction_data: &[u8],
+        ) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let vault = next_account_info(accounts_iter)?;
+            let token_account = next_account_info(accounts_iter)?;
+            let ix = Instruction {
+                program_id: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".parse().unwrap(),
+                accounts: vec![],
+                data: vec![],
+            };
+            invoke(&ix, &[vault.clone(), token_account.clone()])
+        }
+    "#;
+    let (_, findings) = run_auth(src);
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+#[test]
 fn signer_checked_authority_is_not_reported() {
     // SAT021 skips when `is_signer_checked`; SAT019 requires `!is_signer_checked`.
     let src = r#"

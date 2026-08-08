@@ -1517,11 +1517,21 @@ fn expr_contains_lamports(expr: &syn::Expr) -> bool {
     }
 }
 
-pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&str>) -> Result<()> {
+pub fn run(
+    path: Option<&str>,
+    format: &str,
+    triage: bool,
+    tx_report: Option<&str>,
+    expectations: Option<&str>,
+) -> Result<()> {
     ui::print_banner();
 
     if format != "text" && format != "sarif" {
-        ui::print_warning(&format!("Unknown format '{}', defaulting to text.", format));
+        ui::print_warning(&format!("Unknown format '{format}', defaulting to text."));
+    }
+
+    if expectations.is_some() {
+        ui::print_notice("Expectations export requested for native programs.");
     }
 
     let src_path = path.map(PathBuf::from).unwrap_or_else(find_default_source_path);
@@ -1585,6 +1595,16 @@ pub fn run(path: Option<&str>, format: &str, triage: bool, tx_report: Option<&st
     all_findings.extend(deserialization::check_manual_deserialization(&all_accounts, &parsed_files));
     all_findings.extend(token2022::analyze(&src_path, &parsed_files, &all_accounts));
     all_findings.extend(native::analyze(&parsed_files));
+
+    if let Some(out) = expectations {
+        let had_native = parsed_files.iter().any(|(file, _)| native::frontend::has_native_marker(file));
+        native::expectations::export(&parsed_files, out)?;
+        if had_native {
+            ui::print_success(&format!("Exported native expectations to {out}"));
+        } else {
+            ui::print_warning(&format!("No native program found; {out} contains no instructions."));
+        }
+    }
 
     if let Some(report_path) = tx_report {
         all_findings.extend(tx_report::check_tx_report_correlation(&all_accounts, report_path));

@@ -1,0 +1,343 @@
+{
+  "program_name": "program",
+  "program_id": "AvtB6w9xboLwA145E221vhof5TddhqsChYcx7Fy3xVMH",
+  "source": "native",
+  "instructions": [
+    {
+      "name": "WithdrawMsrm",
+      "discriminator_hex": "24",
+      "handler": "withdraw_msrm",
+      "accounts": [
+        {
+          "name": "mango_group_ai",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "mango_account_ai",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "owner_ai",
+          "index": 2,
+          "is_signer_expected": true,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "msrm_account_ai",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "msrm_vault_ai",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "signer_ai",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_prog_ai",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "RecoveryWithdrawTokenVault",
+      "discriminator_hex": "4c",
+      "handler": "recovery_withdraw_token_vault",
+      "accounts": [
+        {
+          "name": "mango_group_ai",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ai",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_account_ai",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "root_bank_ai",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "node_bank_ai",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "signer_ai",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_prog_ai",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "RecoveryWithdrawMngoVault",
+      "discriminator_hex": "4d",
+      "handler": "recovery_withdraw_mngo_vault",
+      "accounts": [
+        {
+          "name": "mango_group_ai",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ai",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_account_ai",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "perp_market_ai",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "signer_ai",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_prog_ai",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "RecoveryWithdrawInsuranceVault",
+      "discriminator_hex": "4e",
+      "handler": "recovery_withdraw_insurance_vault",
+      "accounts": [
+        {
+          "name": "mango_group_ai",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ai",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_account_ai",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "signer_ai",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_prog_ai",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "RecoveryForceSettleSpotOrders",
+      "discriminator_hex": "4b",
+      "handler": "recovery_force_settle_spot_orders",
+      "accounts": [
+        {
+          "name": "mango_group_ai",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "mango_account_ai",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "base_root_bank_ai",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "base_node_bank_ai",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "base_vault_ai",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "quote_root_bank_ai",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "quote_node_bank_ai",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "quote_vault_ai",
+          "index": 7,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "spot_market_ai",
+          "index": 8,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "bids_ai",
+          "index": 9,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "asks_ai",
+          "index": 10,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "signer_ai",
+          "index": 11,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "dex_event_queue_ai",
+          "index": 12,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "dex_base_ai",
+          "index": 13,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "dex_quote_ai",
+          "index": 14,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "dex_signer_ai",
+          "index": 15,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "dex_prog_ai",
+          "index": 16,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_prog_ai",
+          "index": 17,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    }
+  ]
+}

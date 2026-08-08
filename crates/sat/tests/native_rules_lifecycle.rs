@@ -253,6 +253,9 @@ fn one_ix_source(body: &str) -> String {
         }};
         entrypoint!(process_instruction);
         const STATE_DISCRIMINATOR: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+        struct State {{
+            total: u64,
+        }}
         pub fn process_instruction(_program_id: &Pubkey, accounts: &[AccountInfo], _instruction_data: &[u8]) -> ProgramResult {{
             let accounts_iter = &mut accounts.iter();
             {body}
@@ -260,6 +263,82 @@ fn one_ix_source(body: &str) -> String {
         }}
         "#
     )
+}
+
+// ── SAT026 fixed-point (Mango I80F48) FP regression ─────────────────────────
+
+#[test]
+fn fixed_point_fixture_yields_no_sat026_findings() {
+    let (_, findings) = run_lifecycle_fixture("fixed_point.rs");
+    assert!(by_rule(&findings, SAT026).is_empty(), "fixed-point arithmetic must not fire: {findings:?}");
+}
+
+#[test]
+fn typed_fixed_point_local_suppresses_sat026() {
+    // (a) explicit non-primitive type annotation.
+    let src = one_ix_source("let mut total: FixedPoint = FixedPoint::zero();\n        total += 1;");
+    let (_, findings) = run_lifecycle(&src);
+    assert!(by_rule(&findings, SAT026).is_empty(), "{findings:?}");
+}
+
+#[test]
+fn constructor_initialized_local_suppresses_sat026() {
+    // (b) non-primitive constructor call.
+    let src = one_ix_source("let mut total = FixedPoint::from_num(1.0);\n        total += 1;");
+    let (_, findings) = run_lifecycle(&src);
+    assert!(by_rule(&findings, SAT026).is_empty(), "{findings:?}");
+}
+
+#[test]
+fn fixed_point_parameter_suppresses_sat026() {
+    // (c) non-primitive parameter type, plus a struct field on a non-primitive
+    // receiver (d).
+    let src = r#"
+        use solana_program::{{
+            account_info::{{next_account_info, AccountInfo}},
+            entrypoint,
+            entrypoint::ProgramResult,
+            pubkey::Pubkey,
+        }};
+        entrypoint!(process_instruction);
+        pub fn process_instruction(_program_id: &Pubkey, accounts: &[AccountInfo], _instruction_data: &[u8]) -> ProgramResult {{
+            let accounts_iter = &mut accounts.iter();
+            let market = next_account_info(accounts_iter)?;
+            apply_fees(market);
+            Ok(())
+        }}
+        struct Market {{
+            fees_accrued: FixedPoint,
+        }}
+        struct FixedPoint(i128);
+        fn apply_fees(market: &mut Market) {{
+            let ref_fee_rate: FixedPoint = FixedPoint::from_num(0.0001);
+            market.fees_accrued += ref_fee_rate;
+        }}
+        "#;
+    let (_, findings) = run_lifecycle(src);
+    assert!(by_rule(&findings, SAT026).is_empty(), "{findings:?}");
+}
+
+#[test]
+fn primitive_local_arithmetic_still_fires() {
+    // `u64::from_le_bytes` is not a constructor, so `total` stays u64 and the
+    // raw `+=` keeps firing; the index/cast operand is never classified.
+    let src = one_ix_source(
+        "let bytes = [0u8; 16];\n        let mut total = u64::from_le_bytes(bytes[0..8].try_into().unwrap());\n        total += bytes[8] as u64;",
+    );
+    let (_, findings) = run_lifecycle(&src);
+    let hits = by_rule(&findings, SAT026);
+    assert_eq!(hits.len(), 1, "{findings:?}");
+    assert_eq!(hits[0].severity, Severity::High);
+}
+
+#[test]
+fn primitive_constructor_local_still_fires() {
+    // `u64::from(..)` resolves to primitive: (b) must not suppress it.
+    let src = one_ix_source("let mut total = u64::from(7u8);\n        total += 1;");
+    let (_, findings) = run_lifecycle(&src);
+    assert_eq!(by_rule(&findings, SAT026).len(), 1, "{findings:?}");
 }
 
 // ── SAT024 close variants and FP filters ────────────────────────────────────

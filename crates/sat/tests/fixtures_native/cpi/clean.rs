@@ -1,8 +1,9 @@
 //! Clean native program: the same CPI/state patterns with every guard
 //! present — SAT028 (authority signer-checked in the handler AND marked as a
 //! signer in its AccountMeta), no self-invocation, SAT030 (both state writers
-//! guarded: `data_is_empty()` and a `data[0..8] == DISCRIMINATOR`-style
-//! compare).
+//! guarded: `data_is_empty()` and a discriminator check on a locally
+//! deserialized state struct, `let s = State::try_from_slice(&data)?;
+//! s.discriminator != STATE_DISCRIMINATOR`).
 //!
 //! Dispatch (byte-slice discriminators):
 //! - `process_transfer` — signer-guarded token transfer CPI, guarded state
@@ -25,6 +26,16 @@ use solana_program::{
 entrypoint!(process_instruction);
 
 declare_id!("CleanCzJ36AjZyKwVj3VnYU4GTonjftVETpppHvdwSQe");
+
+/// Expected discriminator of an initialized `State` account.
+const STATE_DISCRIMINATOR: [u8; 8] = [9u8, 9, 9, 9, 9, 9, 9, 9];
+
+/// On-chain state, deserialized with borsh from the account's data.
+pub struct State {
+    pub discriminator: [u8; 8],
+    pub version: u8,
+    pub is_initialized: bool,
+}
 
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -92,9 +103,11 @@ fn process_withdraw(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
         return Err(ProgramError::IllegalOwner);
     }
 
-    // SAT030 guard: the discriminator must already be present.
+    // SAT030 guard: the deserialized state must carry the discriminator — a
+    // closed or never-initialized account is rejected before any write.
     let data = state.data.borrow();
-    if data[0..8] != [9u8, 9, 9, 9, 9, 9, 9, 9] {
+    let s = State::try_from_slice(&data)?;
+    if s.discriminator != STATE_DISCRIMINATOR {
         return Err(ProgramError::InvalidAccountData);
     }
     drop(data);

@@ -858,6 +858,279 @@ fn sat027(program: &NativeProgram, index: &FnIndex) -> Vec<Finding> {
     findings
 }
 
+// ── SAT026 type-awareness heuristics ─────────────────────────────────────────
+
+/// Primitive scalar types whose raw arithmetic SAT026 flags (spec §7).
+fn is_primitive_ident(name: &str) -> bool {
+    matches!(
+        name,
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "f32"
+            | "f64"
+            | "usize"
+            | "isize"
+    )
+}
+
+/// Reference/box-like wrappers stripped when classifying a type.
+fn is_wrapper_ident(name: &str) -> bool {
+    matches!(name, "Option" | "Box" | "Rc" | "Arc" | "Ref" | "RefMut" | "Cell" | "RefCell" | "Cow" | "Result" | "Pin")
+}
+
+/// Constructor method names that identify a fixed-point style type with
+/// internally checked operators (Mango's `I80F48::from_num`/`from_bits`/
+/// `zero()`/`one()` class).
+const CONSTRUCTORS: [&str; 7] = ["from", "from_num", "from_str", "new", "from_bits", "zero", "one"];
+
+/// Inferred type of a local/parameter: primitive (u64/i64/...) or a
+/// non-primitive type whose name is kept for struct-field resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VarType {
+    Primitive,
+    NonPrimitive(String),
+}
+
+impl VarType {
+    fn is_non_primitive(&self) -> bool {
+        matches!(self, VarType::NonPrimitive(_))
+    }
+}
+
+type VarTypes = HashMap<String, VarType>;
+
+/// Struct definitions of the parsed workspace: name → (field → type).
+struct StructIndex<'a>(HashMap<String, HashMap<String, &'a syn::Type>>);
+
+impl<'a> StructIndex<'a> {
+    fn build(parsed: &'a [(syn::File, String)]) -> Self {
+        let mut index = HashMap::new();
+        for (file, _) in parsed {
+            collect_structs(&file.items, &mut index);
+        }
+        StructIndex(index)
+    }
+
+    fn fields(&self, name: &str) -> Option<&HashMap<String, &'a syn::Type>> {
+        self.0.get(name)
+    }
+}
+
+fn collect_structs<'a>(items: &'a [syn::Item], out: &mut HashMap<String, HashMap<String, &'a syn::Type>>) {
+    for item in items {
+        match item {
+            syn::Item::Struct(s) => {
+                let mut fields = HashMap::new();
+                if let syn::Fields::Named(named) = &s.fields {
+                    for f in &named.named {
+                        if let Some(ident) = &f.ident {
+                            fields.insert(ident.to_string(), &f.ty);
+                        }
+                    }
+                }
+                out.insert(s.ident.to_string(), fields);
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    collect_structs(inner, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Classify a type as primitive or non-primitive, stripping references and
+/// wrapper generics: `&mut PerpMarket`, `Option<I80F48>` and `Box<FixedPoint>`
+/// all classify by their innermost type. `None` = unclassifiable.
+fn classify_type(ty: &syn::Type) -> Option<VarType> {
+    match ty {
+        syn::Type::Reference(r) => classify_type(&r.elem),
+        syn::Type::Paren(p) => classify_type(&p.elem),
+        syn::Type::Group(g) => classify_type(&g.elem),
+        syn::Type::Slice(s) => match classify_type(&s.elem) {
+            Some(VarType::Primitive) => Some(VarType::Primitive),
+            _ => None,
+        },
+        syn::Type::Array(a) => match classify_type(&a.elem) {
+            Some(VarType::Primitive) => Some(VarType::Primitive),
+            _ => None,
+        },
+        syn::Type::Path(p) => {
+            let last = p.path.segments.last()?;
+            if is_wrapper_ident(&last.ident.to_string()) {
+                let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None };
+                let inner = args.args.iter().find_map(|arg| match arg {
+                    syn::GenericArgument::Type(t) => Some(t),
+                    _ => None,
+                })?;
+                return classify_type(inner);
+            }
+            let name = last.ident.to_string();
+            if is_primitive_ident(&name) { Some(VarType::Primitive) } else { Some(VarType::NonPrimitive(name)) }
+        }
+        _ => None,
+    }
+}
+
+/// Strip `( ... )`, `?`, `&` and deref wrappers from an expression.
+fn unwrap_expr(e: &syn::Expr) -> &syn::Expr {
+    match e {
+        syn::Expr::Try(t) => unwrap_expr(&t.expr),
+        syn::Expr::Paren(p) => unwrap_expr(&p.expr),
+        syn::Expr::Group(g) => unwrap_expr(&g.expr),
+        syn::Expr::Reference(r) => unwrap_expr(&r.expr),
+        syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => unwrap_expr(&u.expr),
+        _ => e,
+    }
+}
+
+struct LetInfo<'a> {
+    pat: &'a syn::Pat,
+    init: Option<&'a syn::Expr>,
+}
+
+fn collect_lets<'a>(block: &'a syn::Block, out: &mut Vec<LetInfo<'a>>) {
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Local(l) => out.push(LetInfo { pat: &l.pat, init: l.init.as_ref().map(|i| i.expr.as_ref()) }),
+            syn::Stmt::Expr(e, _) => collect_lets_in_expr(e, out),
+            _ => {}
+        }
+    }
+}
+
+fn collect_lets_in_expr<'a>(e: &'a syn::Expr, out: &mut Vec<LetInfo<'a>>) {
+    match e {
+        syn::Expr::Block(b) => collect_lets(&b.block, out),
+        syn::Expr::If(i) => {
+            collect_lets(&i.then_branch, out);
+            if let Some((_, other)) = &i.else_branch {
+                collect_lets_in_expr(other, out);
+            }
+        }
+        syn::Expr::Match(m) => {
+            for arm in &m.arms {
+                collect_lets_in_expr(&arm.body, out);
+            }
+        }
+        syn::Expr::While(w) => collect_lets(&w.body, out),
+        syn::Expr::Loop(l) => collect_lets(&l.body, out),
+        syn::Expr::ForLoop(fl) => collect_lets(&fl.body, out),
+        syn::Expr::Closure(c) => collect_lets_in_expr(&c.body, out),
+        syn::Expr::Try(t) => collect_lets_in_expr(&t.expr, out),
+        syn::Expr::Paren(p) => collect_lets_in_expr(&p.expr, out),
+        syn::Expr::Group(g) => collect_lets_in_expr(&g.expr, out),
+        syn::Expr::Reference(r) => collect_lets_in_expr(&r.expr, out),
+        _ => {}
+    }
+}
+
+/// (a) the explicit type annotation of a pattern (`let x: I80F48 = ...`
+/// parses the annotation into `Pat::Type`).
+fn pat_type(pat: &syn::Pat) -> Option<&syn::Type> {
+    match pat {
+        syn::Pat::Type(t) => Some(&t.ty),
+        syn::Pat::Reference(r) => pat_type(&r.pat),
+        syn::Pat::Paren(p) => pat_type(&p.pat),
+        _ => None,
+    }
+}
+
+/// (a)+(b)+(c): infer the type of every local from explicit annotations,
+/// constructor calls, and arithmetic/field initializers (`let fees =
+/// quote_native * fee_rate` keeps `fees` non-primitive), and of every
+/// parameter from the signature. Locals are collected in source order, so an
+/// initializer can see the types of earlier bindings.
+fn infer_locals(f: &syn::ItemFn, structs: &StructIndex) -> VarTypes {
+    let mut vars = VarTypes::new();
+    for input in &f.sig.inputs {
+        let syn::FnArg::Typed(t) = input else { continue };
+        if let Some(name) = pat_ident(&t.pat)
+            && let Some(v) = classify_type(&t.ty)
+        {
+            vars.insert(name, v);
+        }
+    }
+    let mut lets = Vec::new();
+    collect_lets(&f.block, &mut lets);
+    for l in lets {
+        let Some(name) = pat_ident(l.pat) else { continue };
+        let v = pat_type(l.pat)
+            .and_then(classify_type)
+            .or_else(|| l.init.and_then(|i| resolve_expr_type(i, &vars, structs)));
+        if let Some(v) = v {
+            vars.insert(name, v);
+        }
+    }
+    vars
+}
+
+/// Best-effort type of an expression, used both for operand suppression and
+/// for local inference: paths resolve through `vars`, struct-field accesses
+/// resolve through the struct definition (falling back to the receiver's
+/// type), constructor calls classify by their path, and binary expressions
+/// inherit a non-primitive operand's type.
+fn resolve_expr_type(e: &syn::Expr, vars: &VarTypes, structs: &StructIndex) -> Option<VarType> {
+    match unwrap_expr(e) {
+        syn::Expr::Path(p) => p.path.segments.last().and_then(|s| vars.get(&s.ident.to_string()).cloned()),
+        syn::Expr::Field(f) => {
+            let syn::Member::Named(name) = &f.member else { return None };
+            let recv = resolve_expr_type(&f.base, vars, structs);
+            if let Some(VarType::NonPrimitive(struct_name)) = &recv
+                && let Some(fields) = structs.fields(struct_name)
+                && let Some(fty) = fields.get(&name.to_string())
+            {
+                return classify_type(fty);
+            }
+            recv
+        }
+        syn::Expr::Call(c) => {
+            if let syn::Expr::Path(p) = c.func.as_ref()
+                && let Some(last) = p.path.segments.last()
+                && CONSTRUCTORS.contains(&last.ident.to_string().as_str())
+            {
+                let first = p.path.segments.first()?.ident.to_string();
+                return Some(if is_primitive_ident(&first) {
+                    VarType::Primitive
+                } else {
+                    VarType::NonPrimitive(first)
+                });
+            }
+            None
+        }
+        syn::Expr::Binary(b) => {
+            let l = resolve_expr_type(&b.left, vars, structs);
+            if matches!(l, Some(VarType::NonPrimitive(_))) {
+                l
+            } else {
+                let r = resolve_expr_type(&b.right, vars, structs);
+                if matches!(r, Some(VarType::NonPrimitive(_))) { r } else { None }
+            }
+        }
+        // `data[0]` and `data.len()` are container accesses: never classified,
+        // so arithmetic on them stays flagged.
+        syn::Expr::Index(_) | syn::Expr::MethodCall(_) | syn::Expr::Cast(_) => None,
+        _ => None,
+    }
+}
+
+/// (d) Suppress when any operand's inferred type is non-primitive: fixed-point
+/// struct fields (`market.fees_accrued += x`), constructor calls, and
+/// locals/params typed as non-primitive all indicate internally checked
+/// arithmetic (Mango's `I80F48` class).
+fn has_non_primitive_operand(binary: &syn::ExprBinary, vars: &VarTypes, structs: &StructIndex) -> bool {
+    resolve_expr_type(&binary.left, vars, structs).is_some_and(|t| t.is_non_primitive())
+        || resolve_expr_type(&binary.right, vars, structs).is_some_and(|t| t.is_non_primitive())
+}
+
 // ── SAT026 (port of the Anchor backend's SAT012 walker) ──────────────────────
 
 fn is_security_relevant_arithmetic(lhs: &str, rhs: &str, is_assign: bool) -> bool {
@@ -931,28 +1204,43 @@ fn type_to_string(ty: &syn::Type) -> String {
 /// every parsed file. Same titles and severities as SAT012 (the multiplication
 /// variant stays `Medium`/`Unsafe Multiplication:`), plus the `/` and `%`
 /// operators the native spec lists.
+///
+/// Type-awareness: a finding is suppressed when any operand's inferred type
+/// is non-primitive (explicit annotations, constructor calls, parameter
+/// types, or struct fields of a non-primitive receiver), since custom
+/// fixed-point types (Mango's `I80F48`) implement internally checked
+/// operators. `data[0]`/`data.len()` container accesses are never classified.
 fn sat026(parsed: &[(syn::File, String)]) -> Vec<Finding> {
+    let structs = StructIndex::build(parsed);
     let mut findings = Vec::new();
     for (file, path) in parsed {
         let mut fns = Vec::new();
         collect_fns(&file.items, path, &mut fns);
         for (f, _) in fns {
             let fn_name = f.sig.ident.to_string();
-            find_unsafe_ops_in_block(&f.block, &fn_name, path, &mut findings);
+            let vars = infer_locals(f, &structs);
+            find_unsafe_ops_in_block(&f.block, &fn_name, path, &vars, &structs, &mut findings);
         }
     }
     findings
 }
 
-fn find_unsafe_ops_in_block(block: &syn::Block, fn_name: &str, file: &str, findings: &mut Vec<Finding>) {
+fn find_unsafe_ops_in_block(
+    block: &syn::Block,
+    fn_name: &str,
+    file: &str,
+    vars: &VarTypes,
+    structs: &StructIndex,
+    findings: &mut Vec<Finding>,
+) {
     for stmt in &block.stmts {
         match stmt {
             syn::Stmt::Expr(expr, _) => {
-                find_unsafe_ops_in_expr(expr, fn_name, file, findings);
+                find_unsafe_ops_in_expr(expr, fn_name, file, vars, structs, findings);
             }
             syn::Stmt::Local(local) => {
                 if let Some(init) = &local.init {
-                    find_unsafe_ops_in_expr(&init.expr, fn_name, file, findings);
+                    find_unsafe_ops_in_expr(&init.expr, fn_name, file, vars, structs, findings);
                 }
             }
             _ => {}
@@ -961,7 +1249,14 @@ fn find_unsafe_ops_in_block(block: &syn::Block, fn_name: &str, file: &str, findi
 }
 
 #[allow(clippy::too_many_lines)]
-fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings: &mut Vec<Finding>) {
+fn find_unsafe_ops_in_expr(
+    expr: &syn::Expr,
+    fn_name: &str,
+    file: &str,
+    vars: &VarTypes,
+    structs: &StructIndex,
+    findings: &mut Vec<Finding>,
+) {
     match expr {
         syn::Expr::Binary(binary) => {
             let line = binary.span().start().line;
@@ -994,36 +1289,39 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
                 let is_assign = is_sub_assign || is_add_assign || is_div_assign || is_rem_assign;
 
                 if !is_security_relevant_arithmetic(&lhs_str, &rhs_str, is_assign) {
-                    find_unsafe_ops_in_expr(&binary.left, fn_name, file, findings);
-                    find_unsafe_ops_in_expr(&binary.right, fn_name, file, findings);
+                    find_unsafe_ops_in_expr(&binary.left, fn_name, file, vars, structs, findings);
+                    find_unsafe_ops_in_expr(&binary.right, fn_name, file, vars, structs, findings);
                     return;
                 }
 
-                findings.push(Finding {
-                    id: String::new(),
-                    title: format!("{SAT026_TITLE} `{op_str}{op_form}` in `{fn_name}` — use checked_*() instead"),
-                    severity: Severity::High,
-                    description: format!(
-                        "The expression `{lhs_str}` uses `{op_str}{op_form}` on a field in `{fn_name}`. \
-                         In release mode (optimized builds), Rust arithmetic wraps on overflow instead \
-                         of panicking. Use `{checked}()`, or `overflow-checks = true` instead.",
-                    ),
-                    location: Some(format!("{file}:{line} ({fn_name})")),
-                    suggestion: Some(if is_assign {
-                        format!(
-                            "Replace with `.{checked}(amount).ok_or(Error::Underflow)?` or \
-                             `.{checked}(amount).ok_or(Error::Overflow)?`."
-                        )
-                    } else {
-                        format!("Use `{checked}()` instead of the raw operator.")
-                    }),
-                });
+                if !has_non_primitive_operand(binary, vars, structs) {
+                    findings.push(Finding {
+                        id: String::new(),
+                        title: format!("{SAT026_TITLE} `{op_str}{op_form}` in `{fn_name}` — use checked_*() instead"),
+                        severity: Severity::High,
+                        description: format!(
+                            "The expression `{lhs_str}` uses `{op_str}{op_form}` on a field in `{fn_name}`. \
+                             In release mode (optimized builds), Rust arithmetic wraps on overflow instead \
+                             of panicking. Use `{checked}()`, or `overflow-checks = true` instead.",
+                        ),
+                        location: Some(format!("{file}:{line} ({fn_name})")),
+                        suggestion: Some(if is_assign {
+                            format!(
+                                "Replace with `.{checked}(amount).ok_or(Error::Underflow)?` or \
+                                 `.{checked}(amount).ok_or(Error::Overflow)?`."
+                            )
+                        } else {
+                            format!("Use `{checked}()` instead of the raw operator.")
+                        }),
+                    });
+                }
             }
 
             if (is_mul || is_mul_assign)
                 && !lhs_str.is_empty()
                 && !rhs_str.is_empty()
                 && is_security_relevant_arithmetic(&lhs_str, &rhs_str, is_mul_assign)
+                && !has_non_primitive_operand(binary, vars, structs)
             {
                 findings.push(Finding {
                     id: String::new(),
@@ -1042,47 +1340,47 @@ fn find_unsafe_ops_in_expr(expr: &syn::Expr, fn_name: &str, file: &str, findings
                 });
             }
 
-            find_unsafe_ops_in_expr(&binary.left, fn_name, file, findings);
-            find_unsafe_ops_in_expr(&binary.right, fn_name, file, findings);
+            find_unsafe_ops_in_expr(&binary.left, fn_name, file, vars, structs, findings);
+            find_unsafe_ops_in_expr(&binary.right, fn_name, file, vars, structs, findings);
         }
         syn::Expr::If(if_expr) => {
-            find_unsafe_ops_in_expr(&if_expr.cond, fn_name, file, findings);
-            find_unsafe_ops_in_block(&if_expr.then_branch, fn_name, file, findings);
+            find_unsafe_ops_in_expr(&if_expr.cond, fn_name, file, vars, structs, findings);
+            find_unsafe_ops_in_block(&if_expr.then_branch, fn_name, file, vars, structs, findings);
             if let Some((_, else_expr)) = &if_expr.else_branch {
-                find_unsafe_ops_in_expr(else_expr, fn_name, file, findings);
+                find_unsafe_ops_in_expr(else_expr, fn_name, file, vars, structs, findings);
             }
         }
         syn::Expr::Block(block_expr) => {
-            find_unsafe_ops_in_block(&block_expr.block, fn_name, file, findings);
+            find_unsafe_ops_in_block(&block_expr.block, fn_name, file, vars, structs, findings);
         }
         syn::Expr::ForLoop(for_loop) => {
-            find_unsafe_ops_in_block(&for_loop.body, fn_name, file, findings);
+            find_unsafe_ops_in_block(&for_loop.body, fn_name, file, vars, structs, findings);
         }
         syn::Expr::While(while_loop) => {
-            find_unsafe_ops_in_expr(&while_loop.cond, fn_name, file, findings);
-            find_unsafe_ops_in_block(&while_loop.body, fn_name, file, findings);
+            find_unsafe_ops_in_expr(&while_loop.cond, fn_name, file, vars, structs, findings);
+            find_unsafe_ops_in_block(&while_loop.body, fn_name, file, vars, structs, findings);
         }
         syn::Expr::Loop(loop_expr) => {
-            find_unsafe_ops_in_block(&loop_expr.body, fn_name, file, findings);
+            find_unsafe_ops_in_block(&loop_expr.body, fn_name, file, vars, structs, findings);
         }
         syn::Expr::Match(match_expr) => {
             for arm in &match_expr.arms {
                 if let Some((_, guard_expr)) = &arm.guard {
-                    find_unsafe_ops_in_expr(guard_expr, fn_name, file, findings);
+                    find_unsafe_ops_in_expr(guard_expr, fn_name, file, vars, structs, findings);
                 }
-                find_unsafe_ops_in_expr(&arm.body, fn_name, file, findings);
+                find_unsafe_ops_in_expr(&arm.body, fn_name, file, vars, structs, findings);
             }
         }
         syn::Expr::Call(call) => {
             for arg in &call.args {
-                find_unsafe_ops_in_expr(arg, fn_name, file, findings);
+                find_unsafe_ops_in_expr(arg, fn_name, file, vars, structs, findings);
             }
         }
         // `x = a + b` / `x = a * b` — descend into plain assignments so the
         // arithmetic inside them is still walked.
         syn::Expr::Assign(assign) => {
-            find_unsafe_ops_in_expr(&assign.left, fn_name, file, findings);
-            find_unsafe_ops_in_expr(&assign.right, fn_name, file, findings);
+            find_unsafe_ops_in_expr(&assign.left, fn_name, file, vars, structs, findings);
+            find_unsafe_ops_in_expr(&assign.right, fn_name, file, vars, structs, findings);
         }
         _ => {}
     }

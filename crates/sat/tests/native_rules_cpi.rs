@@ -700,3 +700,128 @@ fn sat030_unguarded_pair_is_reported() {
     assert_eq!(sat030.len(), 1, "{findings:?}");
     assert!(sat030[0].description.contains("process_a") && sat030[0].description.contains("process_b"));
 }
+
+#[test]
+fn deser_local_discriminator_guards_are_recognized() {
+    // Both writers are guarded ONLY by a discriminator/init-field comparison on
+    // a local deserialized from the account's data (`try_from_slice` +
+    // `s.discriminator`, `unpack` + `s.tag`) — the FP class from QA: no SAT030.
+    let src = r#"
+        use solana_program::{
+            account_info::{next_account_info, AccountInfo},
+            entrypoint,
+            entrypoint::ProgramResult,
+            program_error::ProgramError,
+            pubkey::Pubkey,
+        };
+        entrypoint!(process_instruction);
+        const STATE_DISCRIMINATOR: [u8; 8] = [9u8, 9, 9, 9, 9, 9, 9, 9];
+        pub struct State {
+            pub discriminator: [u8; 8],
+            pub version: u8,
+        }
+        pub struct TokenState {
+            pub tag: u8,
+            pub is_initialized: bool,
+        }
+        pub fn process_instruction(
+            _program_id: &Pubkey,
+            accounts: &[AccountInfo],
+            instruction_data: &[u8],
+        ) -> ProgramResult {
+            match &instruction_data[0..8] {
+                [1, 2, 3, 4, 5, 6, 7, 8, ..] => process_a(accounts),
+                [9, 10, 11, 12, 13, 14, 15, 16, ..] => process_b(accounts),
+                _ => Err(ProgramError::InvalidInstructionData),
+            }
+        }
+        fn process_a(accounts: &[AccountInfo]) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let state = next_account_info(accounts_iter)?;
+            let data = state.data.borrow();
+            let s = State::try_from_slice(&data)?;
+            if s.discriminator != STATE_DISCRIMINATOR {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            drop(data);
+            let mut data = state.data.borrow_mut();
+            data[0] = 1;
+            Ok(())
+        }
+        fn process_b(accounts: &[AccountInfo]) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let state = next_account_info(accounts_iter)?;
+            let data = state.data.borrow();
+            let s = TokenState::unpack(&data)?;
+            if s.tag != 2 {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            drop(data);
+            let mut data = state.data.borrow_mut();
+            data[0] = 2;
+            Ok(())
+        }
+    "#;
+    let (_, findings) = run(src);
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+#[test]
+fn deser_guard_is_attributed_only_to_the_fed_account() {
+    // The deserialized-local guard sits on `other`'s data; `state` is still
+    // written without a guard by process_a, so SAT030 must fire for `state`.
+    let src = r#"
+        use solana_program::{
+            account_info::{next_account_info, AccountInfo},
+            entrypoint,
+            entrypoint::ProgramResult,
+            program_error::ProgramError,
+            pubkey::Pubkey,
+        };
+        entrypoint!(process_instruction);
+        const STATE_DISCRIMINATOR: [u8; 8] = [9u8, 9, 9, 9, 9, 9, 9, 9];
+        pub struct State {
+            pub discriminator: [u8; 8],
+            pub version: u8,
+        }
+        pub fn process_instruction(
+            _program_id: &Pubkey,
+            accounts: &[AccountInfo],
+            instruction_data: &[u8],
+        ) -> ProgramResult {
+            match &instruction_data[0..8] {
+                [1, 2, 3, 4, 5, 6, 7, 8, ..] => process_a(accounts),
+                [9, 10, 11, 12, 13, 14, 15, 16, ..] => process_b(accounts),
+                _ => Err(ProgramError::InvalidInstructionData),
+            }
+        }
+        fn process_a(accounts: &[AccountInfo]) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let state = next_account_info(accounts_iter)?;
+            let other = next_account_info(accounts_iter)?;
+            let data = other.data.borrow();
+            let s = State::try_from_slice(&data)?;
+            if s.discriminator != STATE_DISCRIMINATOR {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            drop(data);
+            let mut data = state.data.borrow_mut();
+            data[0] = 1;
+            Ok(())
+        }
+        fn process_b(accounts: &[AccountInfo]) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let state = next_account_info(accounts_iter)?;
+            if state.data_is_empty() {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            let mut data = state.data.borrow_mut();
+            data[0] = 2;
+            Ok(())
+        }
+    "#;
+    let (_, findings) = run(src);
+    let sat030 = by_rule(&findings, SAT030);
+    assert_eq!(sat030.len(), 1, "{findings:?}");
+    assert!(sat030[0].description.contains("process_a"), "{}", sat030[0].description);
+}

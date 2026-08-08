@@ -189,13 +189,26 @@ reuses it). Do not rename prefixes.
 
 Rule modules export `pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding>`.
 
-## 11. Phase 3 (after integration lands)
+## 11. Phase 3 — expectations export (SHIPPED 2026-08-08)
 
-- `sat analyze src <path> --expectations <out.json>`: export per-instruction
-  account expectations mirroring RTS `IdlInstruction`/`IdlAccountItem` shape
-  (name, signer, writable, pda seeds as strings) so `rts` can run its tier-1/tier-2
-  runtime checks against native programs with no IDL. Owned by a new slice.
-- Native benchmark: Mango v3 (cloned), SPL (cloned), plus live audited targets;
-  extend `docs/BENCHMARK.md` with the native section; extend `EXPLOIT_CORPUS.md`
-  with native incidents (Wormhole sysvar/instruction-loading class → NOT-DETECTED,
+- `sat analyze src <path> --expectations <out.json>`: exports the
+  source-derived account model (per instruction: expected signers, writable
+  accounts, PDA seeds) as JSON — the native analog of an Anchor IDL. Schema in
+  `src/native/expectations.rs` (`ExpectationsDoc`): `program_name`,
+  `program_id`, `source: "native"`, `instructions[]` with `name`,
+  `discriminator_hex`, `handler`, `accounts[]` with `name`, `index`,
+  `is_signer_expected`, `is_writable_expected`, `pda { seeds, dynamic_seed_count }`.
+  Only statically-verifiable seeds (string/integer literals) are exported as
+  `seeds`; runtime-dependent seed expressions count in `dynamic_seed_count`.
+  Sample: `bench/mango-expectations.json` (Mango v3).
+
+- **RTS adapter (other repo, next):** `rts` gains a native mode that consumes
+  this file instead of an IDL — tier-1 well-formedness and tier-2 runtime seed
+  cross-reference, signer-role and writable-role checks against real
+  transactions. The account order maps 1:1 to the instruction's `AccountMeta`
+  list.
+
+- Native corpus expansion (next): add live audited targets (Marinade, Jito,
+  Drift, Jupiter) to the benchmark; extend `EXPLOIT_CORPUS.md` with native
+  incidents (Wormhole sysvar/instruction-loading class → NOT-DETECTED,
   Amulet/Cypher missing-auth class → target of SAT019/020/021).

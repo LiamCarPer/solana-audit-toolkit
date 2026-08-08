@@ -16,6 +16,8 @@ pub mod rules;
 use crate::native::model::NativeProgram;
 use crate::types::Finding;
 
+pub mod expectations;
+
 /// Run the native backend over a workspace of parsed files. Empty when no
 /// file has a native marker, or when the rule slices produce no findings.
 pub fn analyze(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {

@@ -110,6 +110,72 @@ pub struct Counter {
 }
 
 #[test]
+fn test_expectations_render_shape() {
+    // pda_cei vuln fixture: byte-match dispatch + find_program_address with a
+    // literal seed (b"escrow") and a dynamic seed (owner.key()).
+    let source = fs::read_to_string("tests/fixtures_native/pda_cei/vuln.rs").unwrap();
+    let (program, _) = native::analyze_source_and_files_for_test(&source);
+    let doc: serde_json::Value = serde_json::from_str(&native::expectations::render(&program).unwrap()).unwrap();
+
+    assert_eq!(doc["source"], "native");
+    assert!(doc["program_name"].as_str().is_some_and(|n| !n.is_empty()));
+    let instructions = doc["instructions"].as_array().unwrap();
+    assert!(!instructions.is_empty(), "native fixture must resolve instructions");
+
+    let mut saw_pda = false;
+    for ix in instructions {
+        assert!(ix["name"].as_str().is_some());
+        assert!(ix["handler"].as_str().is_some());
+        for account in ix["accounts"].as_array().unwrap() {
+            assert!(account["is_signer_expected"].is_boolean());
+            assert!(account["is_writable_expected"].is_boolean());
+            if let Some(pda) = account["pda"].as_object() {
+                saw_pda = true;
+                let seeds = pda["seeds"].as_array().unwrap();
+                assert!(
+                    seeds.iter().any(|s| s == "escrow"),
+                    "literal seed b\"escrow\" must be exported, got: {seeds:?}"
+                );
+                assert!(pda["dynamic_seed_count"].as_u64().unwrap() >= 1, "owner.key() seed must count as dynamic");
+            }
+        }
+    }
+    assert!(saw_pda, "fixture has find_program_address; expectations must carry pda info");
+}
+
+#[test]
+fn test_expectations_export_writes_json_file() {
+    let source = fs::read_to_string("tests/fixtures_native/auth/vuln.rs").unwrap();
+    let (_program, files) = native::analyze_source_and_files_for_test(&source);
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("expectations.json");
+    native::expectations::export(&files, out.to_str().unwrap()).unwrap();
+
+    let json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(json["source"], "native");
+    assert!(!json["instructions"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn test_expectations_anchor_only_workspace_is_empty() {
+    let source = r#"
+#[program]
+pub mod counter {
+    use super::*;
+    pub fn increment(ctx: Context<Increment>) -> Result<()> {
+        Ok(())
+    }
+}
+#[derive(Accounts)]
+pub struct Increment<'info> {}
+"#;
+    let (program, _files) = native::analyze_source_and_files_for_test(source);
+    let doc = native::expectations::build(&program);
+    assert!(doc.instructions.is_empty(), "Anchor-only workspace exports no expectations");
+}
+
+#[test]
 fn test_sarif_classification_of_native_rules() {
     let cases: &[(&str, &str)] = &[
         ("Unverified Signer Account: `x`", "SAT019"),
