@@ -73,3 +73,12 @@ pub struct ResolvedAccount {
     pub seeds: Vec<String>,
     pub is_pda: bool,
 }
+
+impl ResolvedAccount {
+    /// The program requires a signature when the frontend saw a signer guard
+    /// or the account is signer-by-construction. Mirrors the expectations
+    /// export (native/expectations.rs) and the tx-report correlation.
+    pub fn is_signer_expected(&self) -> bool {
+        self.is_signer_checked || self.kind == AccountKind::Signer
+    }
+}

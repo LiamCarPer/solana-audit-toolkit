@@ -120,9 +120,7 @@ fn render_account(account: &ResolvedAccount) -> ExpectationAccount {
     ExpectationAccount {
         name: account.name.clone(),
         index: account.index,
-        // The program requires a signature when the frontend saw a signer
-        // guard or the account is signer-by-construction.
-        is_signer_expected: account.is_signer_checked || account.kind == crate::native::model::AccountKind::Signer,
+        is_signer_expected: account.is_signer_expected(),
         is_writable_expected: account.written,
         pda: if account.is_pda || !account.seeds.is_empty() {
             Some(ExpectationPda { seeds, dynamic_seed_count: dynamic })

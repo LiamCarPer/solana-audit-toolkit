@@ -1,4 +1,5 @@
 use sat::analyzer;
+use sat::native::analyze_source_for_test;
 use sat::types::Severity;
 
 #[test]
@@ -1164,4 +1165,251 @@ pub struct Withdraw<'info> {
     let unresolved: Vec<_> = findings.iter().filter(|f| f.title.contains("CPI Depth Unresolved")).collect();
     assert_eq!(unresolved.len(), 1, "untraceable invoke target should produce an informational warning");
     assert_eq!(unresolved[0].severity, Severity::Informational);
+}
+
+const NATIVE_SOURCE: &str = r#"
+use solana_program::{
+    account_info::{next_account_info, AccountInfo},
+    entrypoint,
+    entrypoint::ProgramResult,
+    program_error::ProgramError,
+    pubkey::Pubkey,
+};
+
+entrypoint!(process_instruction);
+
+pub fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data[0] {
+        0 => process_transfer(accounts),
+        1 => process_update(accounts),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+
+fn process_transfer(accounts: &[AccountInfo]) -> ProgramResult {
+    let accounts_iter = &mut accounts.iter();
+
+    let from = next_account_info(accounts_iter)?;
+    let authority = next_account_info(accounts_iter)?;
+    let vault = next_account_info(accounts_iter)?;
+
+    if !authority.is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    let mut data = vault.data.borrow_mut();
+    data[0] = 1;
+
+    Ok(())
+}
+
+fn process_update(accounts: &[AccountInfo]) -> ProgramResult {
+    let accounts_iter = &mut accounts.iter();
+
+    let state = next_account_info(accounts_iter)?;
+    let authority = next_account_info(accounts_iter)?;
+
+    if !authority.is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    Ok(())
+}
+"#;
+
+#[test]
+fn test_native_tx_report_signer_mismatch_critical() {
+    let program = analyze_source_for_test(NATIVE_SOURCE);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("tx_report.json");
+    std::fs::write(
+        &report_path,
+        r#"{
+            "schema_version": "1.0",
+            "program_name": "test",
+            "instructions": [
+                {
+                    "name": "instruction_0x00",
+                    "accounts": [
+                        {"name": "from", "is_signer": false, "is_writable": true},
+                        {"name": "authority", "is_signer": false, "is_writable": false},
+                        {"name": "vault", "is_signer": false, "is_writable": true}
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
+    let mismatch: Vec<_> = findings.iter().filter(|f| f.title.contains("Tx-Report Mismatch")).collect();
+    assert_eq!(mismatch.len(), 1, "authority is signer-checked but was not a signer at runtime");
+    assert!(mismatch[0].title.contains("authority"), "{}", mismatch[0].title);
+    assert_eq!(mismatch[0].severity, Severity::Critical);
+}
+
+#[test]
+fn test_native_tx_report_writable_mismatch_high() {
+    let program = analyze_source_for_test(NATIVE_SOURCE);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("tx_report.json");
+    std::fs::write(
+        &report_path,
+        r#"{
+            "schema_version": "1.0",
+            "program_name": "test",
+            "instructions": [
+                {
+                    "name": "instruction_0x00",
+                    "accounts": [
+                        {"name": "from", "is_signer": false, "is_writable": true},
+                        {"name": "authority", "is_signer": true, "is_writable": false},
+                        {"name": "vault", "is_signer": false, "is_writable": false}
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
+    let mismatch: Vec<_> = findings.iter().filter(|f| f.title.contains("Tx-Report Mismatch")).collect();
+    assert_eq!(mismatch.len(), 1, "vault is written by the handler but was not writable at runtime");
+    assert!(mismatch[0].title.contains("vault"), "{}", mismatch[0].title);
+    assert_eq!(mismatch[0].severity, Severity::High);
+    assert!(findings.iter().all(|f| f.severity != Severity::Critical), "writable mismatch must not be Critical");
+}
+
+#[test]
+fn test_native_tx_report_clean_no_findings() {
+    let program = analyze_source_for_test(NATIVE_SOURCE);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("tx_report.json");
+    std::fs::write(
+        &report_path,
+        r#"{
+            "schema_version": "1.0",
+            "program_name": "test",
+            "instructions": [
+                {
+                    "name": "instruction_0x00",
+                    "accounts": [
+                        {"name": "from", "is_signer": false, "is_writable": false},
+                        {"name": "authority", "is_signer": true, "is_writable": false},
+                        {"name": "vault", "is_signer": false, "is_writable": true}
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
+    assert!(findings.is_empty(), "matching signer/writable flags should yield no findings: {findings:#?}");
+}
+
+#[test]
+fn test_native_tx_report_unknown_instruction_skipped() {
+    let program = analyze_source_for_test(NATIVE_SOURCE);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("tx_report.json");
+    std::fs::write(
+        &report_path,
+        r#"{
+            "schema_version": "1.0",
+            "program_name": "test",
+            "instructions": [
+                {
+                    "name": "no_such_instruction",
+                    "accounts": []
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
+    assert!(findings.is_empty(), "unknown instruction names must be skipped: {findings:#?}");
+}
+
+#[test]
+fn test_native_tx_report_fallback_tag_name_matches() {
+    let program = analyze_source_for_test(NATIVE_SOURCE);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("tx_report.json");
+    std::fs::write(
+        &report_path,
+        r#"{
+            "schema_version": "1.0",
+            "program_name": "test",
+            "instructions": [
+                {
+                    "name": "instruction_0x01",
+                    "accounts": [
+                        {"name": "state", "is_signer": false, "is_writable": false},
+                        {"name": "authority", "is_signer": false, "is_writable": false}
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
+    let mismatch: Vec<_> = findings.iter().filter(|f| f.title.contains("Tx-Report Mismatch")).collect();
+    assert_eq!(mismatch.len(), 1, "fallback `instruction_0x01` name must correlate with tag 1 dispatch");
+    assert!(mismatch[0].title.contains("authority"), "{}", mismatch[0].title);
+    assert_eq!(mismatch[0].severity, Severity::Critical);
+}
+
+#[test]
+fn test_native_tx_report_invalid_json_returns_info_finding() {
+    let program = analyze_source_for_test(NATIVE_SOURCE);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("bad.json");
+    std::fs::write(&report_path, "not json").unwrap();
+
+    let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].title.contains("Failed to parse"), "{}", findings[0].title);
+    assert_eq!(findings[0].severity, Severity::Informational);
+}
+
+#[test]
+fn test_native_tx_report_normalized_name_match() {
+    let program = analyze_source_for_test(NATIVE_SOURCE);
+
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("tx_report.json");
+    std::fs::write(
+        &report_path,
+        r#"{
+            "schema_version": "1.0",
+            "program_name": "test",
+            "instructions": [
+                {
+                    "name": "Instruction_0X00",
+                    "accounts": [
+                        {"name": "from", "is_signer": false, "is_writable": false},
+                        {"name": "authority", "is_signer": true, "is_writable": false},
+                        {"name": "vault", "is_signer": false, "is_writable": true}
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
+    assert!(findings.is_empty(), "case-insensitive normalized names should match: {findings:#?}");
 }
