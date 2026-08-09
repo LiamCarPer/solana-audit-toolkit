@@ -62,8 +62,21 @@ pub(crate) struct AnalysisContext {
     pub(crate) accounts_structs: Vec<AccountsStruct>,
     pub(crate) instructions: Vec<SourceInstruction>,
     pub(crate) file_count: usize,
-    #[allow(dead_code)]
-    idl: Option<IdlJson>,
+    #[allow(dead_code)] // consumed by the `poc` module's exploit-scenario builder
+    pub(crate) idl: Option<IdlJson>,
+}
+
+/// Full result of a source analysis. The CLI historically discarded everything
+/// but the findings; downstream commands (`sat poc`) need the parsed files,
+/// the IDL and the native program model to reconstruct a finding's exploit
+/// scenario.
+#[derive(Debug)]
+pub struct AnalysisOutput {
+    pub findings: Vec<Finding>,
+    pub(crate) ctx: AnalysisContext,
+    pub parsed_files: Vec<(syn::File, String)>,
+    #[allow(dead_code)] // consumed by the `poc` module's exploit-scenario builder
+    pub native_program: Option<native::model::NativeProgram>,
 }
 
 // ── Source discovery ──────────────────────────────────────────────────────────
@@ -1541,13 +1554,50 @@ pub fn run(
         ui::print_notice(&format!("Transaction report: {report}"));
     }
 
-    let source_files = discover_source_files(&src_path.to_string_lossy());
-    if source_files.is_empty() {
+    let output = collect(path, tx_report, expectations)?;
+
+    if output.parsed_files.is_empty() {
         ui::print_warning("No Rust source files found. Is this an Anchor workspace?");
         return Ok(());
     }
 
-    ui::print_notice(&format!("Scanning {} source file(s)...", source_files.len()));
+    ui::print_notice(&format!("Scanning {} source file(s)...", output.parsed_files.len()));
+
+    if let Some(out) = expectations {
+        let had_native = output.parsed_files.iter().any(|(file, _)| native::frontend::has_native_marker(file));
+        if had_native {
+            ui::print_success(&format!("Exported native expectations to {out}"));
+        } else {
+            ui::print_warning(&format!("No native program found; {out} contains no instructions."));
+        }
+    }
+
+    if format == "sarif" {
+        let output_path = "sat-results.sarif";
+        sarif::export_sarif(&output.findings, "program", output_path)?;
+        ui::print_success(&format!("Exported {} finding(s) to {output_path}", output.findings.len()));
+        return Ok(());
+    }
+
+    if triage {
+        render::render_triage_findings(&output.findings);
+    } else {
+        render::render_accounts_summary(&output.ctx);
+        render::render_instructions_summary(&output.ctx);
+        render::render_findings(&output.findings);
+    }
+    render::render_summary(&output.findings);
+
+    Ok(())
+}
+
+/// Run the full analysis pipeline and return everything a downstream command
+/// might need. Side effects: writes the native expectations file when
+/// `expectations` is set (matching the historical `run` behavior).
+pub fn collect(path: Option<&str>, tx_report: Option<&str>, expectations: Option<&str>) -> Result<AnalysisOutput> {
+    let src_path = path.map(PathBuf::from).unwrap_or_else(find_default_source_path);
+
+    let source_files = discover_source_files(&src_path.to_string_lossy());
 
     let mut all_accounts = Vec::new();
     let mut all_instructions = Vec::new();
@@ -1597,17 +1647,15 @@ pub fn run(
     all_findings.extend(native::analyze(&parsed_files));
 
     if let Some(out) = expectations {
-        let had_native = parsed_files.iter().any(|(file, _)| native::frontend::has_native_marker(file));
         native::expectations::export(&parsed_files, out)?;
-        if had_native {
-            ui::print_success(&format!("Exported native expectations to {out}"));
-        } else {
-            ui::print_warning(&format!("No native program found; {out} contains no instructions."));
-        }
     }
 
     if let Some(report_path) = tx_report {
         all_findings.extend(tx_report::check_tx_report_correlation(&all_accounts, report_path));
+        if parsed_files.iter().any(|(file, _)| native::frontend::has_native_marker(file)) {
+            let program = native::frontend::build_program(&parsed_files);
+            all_findings.extend(tx_report::check_native_tx_report_correlation(&program, report_path));
+        }
     }
 
     dedupe_findings(&mut all_findings);
@@ -1616,25 +1664,15 @@ pub fn run(
         f.id = format!("SAT-{:03}", i + 1);
     }
 
+    let native_program = if parsed_files.iter().any(|(file, _)| native::frontend::has_native_marker(file)) {
+        Some(native::frontend::build_program(&parsed_files))
+    } else {
+        None
+    };
+
     let ctx = AnalysisContext { accounts_structs: all_accounts, instructions: all_instructions, file_count, idl };
 
-    if format == "sarif" {
-        let output_path = "sat-results.sarif";
-        sarif::export_sarif(&all_findings, "program", output_path)?;
-        ui::print_success(&format!("Exported {} finding(s) to {output_path}", all_findings.len()));
-        return Ok(());
-    }
-
-    if triage {
-        render::render_triage_findings(&all_findings);
-    } else {
-        render::render_accounts_summary(&ctx);
-        render::render_instructions_summary(&ctx);
-        render::render_findings(&all_findings);
-    }
-    render::render_summary(&all_findings);
-
-    Ok(())
+    Ok(AnalysisOutput { findings: all_findings, ctx, parsed_files, native_program })
 }
 
 fn dedupe_findings(findings: &mut Vec<Finding>) {

@@ -12,6 +12,7 @@ mod idl;
 mod init_guard;
 mod native;
 mod pda;
+mod poc;
 mod render;
 mod reporter;
 mod sarif;
@@ -60,6 +61,16 @@ enum Commands {
     Verify {
         #[command(subcommand)]
         action: VerifyAction,
+    },
+    /// Generate a runnable ProgramTest PoC for a finding
+    Poc {
+        /// Finding ID from a prior `sat analyze src` run (e.g. SAT-007)
+        finding_id: String,
+        /// Path to the source directory or file (same as `analyze src`)
+        path: Option<String>,
+        /// Output directory for the generated PoC crate
+        #[arg(long, default_value = "pocs")]
+        out_dir: String,
     },
     /// Print version information
     Version,
@@ -131,6 +142,7 @@ fn main() -> Result<()> {
         Commands::Verify { action } => match action {
             VerifyAction::Init => verify::init(),
         },
+        Commands::Poc { finding_id, path, out_dir } => poc::run(&finding_id, path.as_deref(), &out_dir),
         Commands::Version => {
             ui::print_banner();
             Ok(())

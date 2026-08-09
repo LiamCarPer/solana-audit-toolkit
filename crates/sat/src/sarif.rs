@@ -143,6 +143,11 @@ const RULES: &[(&str, &str, &str)] = &[
         "Cross-Instruction State Reuse",
         "State account written by multiple instructions without an init guard.",
     ),
+    (
+        "SAT031",
+        "Self-Referential Validation",
+        "Account validation compares only caller-supplied accounts to each other without anchoring to canonical program state.",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -240,10 +245,12 @@ pub fn export_sarif(findings: &[Finding], _program_name: &str, output_path: &str
     Ok(())
 }
 
-fn classify_finding_rule(finding: &Finding) -> String {
+pub(crate) fn classify_finding_rule(finding: &Finding) -> String {
     // Native-backend rules first: several older arms below are greedy
     // (e.g. "Mismatch", "Sysvar") and would swallow the new titles.
-    if finding.title.contains("Unverified Signer Account") {
+    if finding.title.contains("Self-Referential Validation") {
+        "SAT031".to_string()
+    } else if finding.title.contains("Unverified Signer Account") {
         "SAT019".to_string()
     } else if finding.title.contains("Unverified Owner Account") {
         "SAT020".to_string()

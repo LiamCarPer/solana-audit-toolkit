@@ -9,6 +9,7 @@ pub mod idl;
 pub mod init_guard;
 pub mod native;
 pub mod pda;
+pub mod poc;
 pub mod render;
 pub mod reporter;
 pub mod sarif;
