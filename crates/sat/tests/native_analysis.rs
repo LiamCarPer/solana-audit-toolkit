@@ -68,8 +68,18 @@ fn test_e2e_cpi_vuln_fixture() {
 }
 
 #[test]
+fn test_e2e_validate_vuln_fixture() {
+    let (_program, findings) = analyze_fixture("validate/vuln.rs");
+    assert!(
+        findings.iter().any(|f| f.title.starts_with("Self-Referential Validation:")),
+        "expected a Self-Referential Validation finding in validate/vuln.rs, got: {:?}",
+        findings.iter().map(|f| &f.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_e2e_clean_fixtures_produce_no_native_findings() {
-    for rel in ["auth/clean.rs", "pda_cei/clean.rs", "lifecycle/clean.rs", "cpi/clean.rs"] {
+    for rel in ["auth/clean.rs", "pda_cei/clean.rs", "lifecycle/clean.rs", "cpi/clean.rs", "validate/clean.rs"] {
         let (_program, findings) = analyze_fixture(rel);
         assert!(
             findings.is_empty(),
@@ -189,6 +199,7 @@ fn test_sarif_classification_of_native_rules() {
         ("Token CPI Unverified Authority: `x`", "SAT028"),
         ("Self-Invocation: `x`", "SAT029"),
         ("Cross-Instruction State Reuse: `x`", "SAT030"),
+        ("Self-Referential Validation: `x`", "SAT031"),
         // SAT026 intentionally reuses the Anchor SAT012 title.
         ("Unsafe Arithmetic: `a + b`", "SAT012"),
     ];
@@ -225,9 +236,10 @@ fn test_sarif_classification_of_native_rules() {
         .iter()
         .filter_map(|r| r["id"].as_str())
         .collect();
-    for id in
-        ["SAT019", "SAT020", "SAT021", "SAT022", "SAT023", "SAT024", "SAT025", "SAT027", "SAT028", "SAT029", "SAT030"]
-    {
+    for id in [
+        "SAT019", "SAT020", "SAT021", "SAT022", "SAT023", "SAT024", "SAT025", "SAT027", "SAT028", "SAT029", "SAT030",
+        "SAT031",
+    ] {
         assert!(rules.contains(&id), "SARIF rules table missing {id}");
     }
 }

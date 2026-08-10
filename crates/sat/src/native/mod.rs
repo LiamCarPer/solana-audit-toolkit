@@ -2,12 +2,15 @@
 //!
 //! The frontend slice owns the pinned model (`model.rs`), paradigm detection
 //! and account/dispatch resolution (`frontend.rs`); the rule slices own the
-//! SAT019–SAT030 checks (`rules/`); the integration slice wires the module
+//! SAT019–SAT031 checks (`rules/`); the integration slice wires the module
 //! into the CLI pipeline.
 //!
-//! `analyze` runs iff any parsed file carries a native marker
-//! (`entrypoint!` or a canonical `process_instruction`); Anchor files in the
-//! same workspace are handled by the existing backend.
+//! `analyze` runs the rule slices whenever a native marker (`entrypoint!` or a
+//! canonical `process_instruction`) exists. On Anchor-only workspaces the
+//! validation slice (SAT031) still runs its Anchor fallback path (`#[program]`
+//! modules, Accounts bundles, `#[access_control]` validation wiring), which is
+//! what makes the Cashio tree analyzable; the other slices need the native
+//! model and stay silent.
 
 pub mod frontend;
 pub mod model;
@@ -19,13 +22,14 @@ use crate::types::Finding;
 pub mod expectations;
 
 /// Run the native backend over a workspace of parsed files. Empty when no
-/// file has a native marker, or when the rule slices produce no findings.
+/// file has a native marker (and no Anchor program exists for the SAT031
+/// fallback), or when the rule slices produce no findings.
 pub fn analyze(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
-    let has_native_marker = parsed_files.iter().any(|(file, _)| frontend::has_native_marker(file));
-    if !has_native_marker {
-        return Vec::new();
-    }
     let program = frontend::build_program(parsed_files);
+    if program.instructions.is_empty() {
+        // Anchor-only workspace: only SAT031 has an Anchor fallback path.
+        return rules::validate::check(&program, parsed_files);
+    }
     rules::run(&program, parsed_files)
 }
 

@@ -130,7 +130,7 @@ Rules must treat guards in `if` conditions, `require!`, `assert!`, `invariant!`,
 and early-return blocks. When the account is a PDA (`is_pda`), key-equality
 against the derived address counts as a key check.
 
-## 7. Rules (SAT019–SAT030) — exact titles, severities, triggers
+## 7. Rules (SAT019–SAT031) — exact titles, severities, triggers
 
 | ID | Exact title prefix | Sev | Trigger (all in resolved model) | FP filters |
 |---|---|---|---|---|
@@ -146,12 +146,23 @@ against the derived address counts as a key check.
 | SAT028 | `Token CPI Unverified Authority:` | High | token `transfer`/`mint_to`/`burn`/`set_authority` CPI whose authority `AccountMeta` maps to an account with `!key_checked` and `!is_signer_checked` (or `invoke` used where `invoke_signed` required for a PDA) | skip when authority is the program itself |
 | SAT029 | `Self-Invocation:` | Medium | CPI where `invoke` program_id equals the declared program_id | — |
 | SAT030 | `Cross-Instruction State Reuse:` | Medium | state account (same type, recovered layout) written by ≥2 instructions where one writes without discriminator/init guard | skip if all writers have init/guard |
+| SAT031 | `Self-Referential Validation:` | High | handler (+ validation helpers, depth ≤ 2, incl. method calls) contains equality comparisons whose connected graph of caller-supplied (account, field) nodes has ≥ 2 nodes and no canonical anchor | skip components with any anchored comparison; skip `a.key == b.key`-only (identity-pinning) components; sysvars/programs/literal-seed PDAs and owner/key-pinned accounts are canonical anchors |
 
 Title wording is **load-bearing**: these exact prefixes avoid substring collisions
 with existing SARIF classifier arms (`"Missing Signer"`, `"Missing Owner"`,
 `"CEI Violation"`, `"PDA Seed"`, `"Reinitialization"`, `"Token Transfer CPI"`,
 `"Sysvar"`, `"Unsafe Arithmetic"` — SAT026 intentionally collides with SAT012 and
-reuses it). Do not rename prefixes.
+reuses it; SAT031's `"Validation"` arm sits above the greedy arms). Do not
+rename prefixes.
+
+SAT031 is the **Cashio class** (EXPLOIT_CORPUS.md): validation that compares
+only caller-supplied accounts to each other with nothing anchoring to canonical
+program state (program id, constants, `_ID`/`_MINT`/`_ADDRESS` consts, owner
+checks, literal-seed PDAs). Detection spans `assert_keys_eq!`-family macros
+(the Vipers shape) and plain `==`/`!=` comparisons; canonical anchoring is
+propagated by fixed point (an account whose `.owner`/`.key` is compared against
+an anchor becomes canonical, so later comparisons against it are anchored).
+Findings are heuristic leads — manual verification is required.
 
 ## 8. Fixture contract (all rule slices)
 
@@ -161,7 +172,8 @@ reuses it). Do not rename prefixes.
   pattern (section 5 items 1–4 + dispatch recovery), parsed without error.
 - Tests: each rule slice owns its own test file
   (`tests/native_rules_auth.rs`, `tests/native_rules_pda_cei.rs`,
-  `tests/native_rules_lifecycle.rs`, `tests/native_rules_cpi.rs`); the
+  `tests/native_rules_lifecycle.rs`, `tests/native_rules_cpi.rs`,
+  `tests/native_rules_validate.rs`); the
   integration slice creates `tests/native_analysis.rs` for end-to-end wiring
   tests; the frontend slice owns `tests/native_frontend.rs`.
 - Fixture code need not compile against real solana crates — it is parsed with
@@ -185,6 +197,7 @@ reuses it). Do not rename prefixes.
 | R2 | `src/native/rules/pda_cei.rs` (SAT022/023) + fixtures | pinned model only |
 | R3 | `src/native/rules/lifecycle.rs` (SAT024/025/026/027) + fixtures | pinned model only |
 | R4 | `src/native/rules/cpi.rs` (SAT028/029/030) + fixtures | pinned model only |
+| R5 | `src/native/rules/validate.rs` (SAT031) + fixtures | pinned model only |
 | I (integration) | `lib.rs`, `main.rs`, `analyzer.rs` (run wiring), `sarif.rs`, `tests/native_analysis.rs` harness | all of the above landed |
 
 Rule modules export `pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding>`.
