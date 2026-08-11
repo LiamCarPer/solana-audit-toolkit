@@ -9,42 +9,39 @@
   WARN No `#[derive(Accounts)]` structs found in the source.
 
 ┌
+├─ Native Instruction Handlers
+  --- Resolved 25 native instruction(s) from entrypoint bench\programs\jito-restaking\restaking_program\src\lib.rs:76:
+  - InitializeConfig  handler: process_initialize_config  (no discriminator)  accounts: 4
+  - InitializeNcn  handler: process_initialize_ncn  (no discriminator)  accounts: 5
+  - InitializeOperator  handler: process_initialize_operator  (no discriminator)  accounts: 5
+  - InitializeNcnVaultTicket  handler: process_initialize_ncn_vault_ticket  (no discriminator)  accounts: 7
+  - InitializeNcnOperatorState  handler: process_initialize_ncn_operator_state  (no discriminator)  accounts: 7
+  - InitializeNcnVaultSlasherTicket  handler: process_initialize_ncn_vault_slasher_ticket  (no discriminator)  accounts: 9
+  - InitializeOperatorVaultTicket  handler: process_initialize_operator_vault_ticket  (no discriminator)  accounts: 7
+  - WarmupNcnVaultTicket  handler: process_warmup_ncn_vault_ticket  (no discriminator)  accounts: 5
+  - CooldownNcnVaultTicket  handler: process_cooldown_ncn_vault_ticket  (no discriminator)  accounts: 5
+  - NcnWarmupOperator  handler: process_ncn_warmup_operator  (no discriminator)  accounts: 5
+  - NcnCooldownOperator  handler: process_ncn_cooldown_operator  (no discriminator)  accounts: 5
+  - WarmupNcnVaultSlasherTicket  handler: process_warmup_ncn_vault_slasher_ticket  (no discriminator)  accounts: 7
+  - CooldownNcnVaultSlasherTicket  handler: process_cooldown_ncn_vault_slasher_ticket  (no discriminator)  accounts: 6
+  - WarmupOperatorVaultTicket  handler: process_warmup_operator_vault_ticket  (no discriminator)  accounts: 5
+  - CooldownOperatorVaultTicket  handler: process_cooldown_operator_vault_ticket  (no discriminator)  accounts: 5
+  - OperatorWarmupNcn  handler: process_operator_warmup_ncn  (no discriminator)  accounts: 5
+  - OperatorCooldownNcn  handler: process_operator_cooldown_ncn  (no discriminator)  accounts: 5
+  - NcnSetAdmin  handler: process_ncn_set_admin  (no discriminator)  accounts: 3
+  - NcnSetSecondaryAdmin  handler: process_ncn_set_secondary_admin  (no discriminator)  accounts: 3
+  - OperatorSetAdmin  handler: process_set_node_operator_admin  (no discriminator)  accounts: 3
+  - OperatorSetSecondaryAdmin  handler: process_set_operator_secondary_admin  (no discriminator)  accounts: 3
+  - OperatorSetFee  handler: process_operator_set_fee  (no discriminator)  accounts: 3
+  - NcnDelegateTokenAccount  handler: process_ncn_delegate_token_account  (no discriminator)  accounts: 6
+  - OperatorDelegateTokenAccount  handler: process_operator_delegate_token_account  (no discriminator)  accounts: 6
+  - SetConfigAdmin  handler: process_set_config_admin  (no discriminator)  accounts: 3
+  --- 25 instructions resolved (25 with resolved accounts)
+
+
+┌
 ├─ Findings
-#1 [HIGH] Potential Transfer Fee Bypass: `process_ncn_delegate_token_account` transfers Token-2022 tokens without fee handling
-  at bench\programs\jito-restaking\restaking_program\src\ncn_delegate_token_account.rs (process_ncn_delegate_token_account)
-  confidence: Medium
-
-  The instruction `process_ncn_delegate_token_account` appears to transfer Token-2022 tokens but does not contain any transfer fee calculation logic (no references to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, etc.). Token-2022 mints can have transfer fees configured, and the actual amount received by the recipient will be less than the amount transferred. Without fee handling, internal accounting may silently drift from on-chain balances, allowing fund extraction or protocol insolvency.
-
-  Suggestion:
-  1. Use `spl-token-2022::extension::transfer_fee::TransferFeeConfig` to read the fee configuration.
-2. Calculate the fee: `fee = amount * fee_basis_points / 10000`.
-3. Store the post-fee amount or the actual received amount in internal state.
-4. Consider using `TransferChecked` with the expected post-fee amount.
-
-  Manual verification:
-  - Identify which Token-2022 extensions can be enabled for accepted mints.
-  - Compare internal accounting with actual token balance deltas after transfer.
-  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
-
-#2 [HIGH] Potential Transfer Fee Bypass: `process_operator_delegate_token_account` transfers Token-2022 tokens without fee handling
-  at bench\programs\jito-restaking\restaking_program\src\operator_delegate_token_account.rs (process_operator_delegate_token_account)
-  confidence: Medium
-
-  The instruction `process_operator_delegate_token_account` appears to transfer Token-2022 tokens but does not contain any transfer fee calculation logic (no references to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, etc.). Token-2022 mints can have transfer fees configured, and the actual amount received by the recipient will be less than the amount transferred. Without fee handling, internal accounting may silently drift from on-chain balances, allowing fund extraction or protocol insolvency.
-
-  Suggestion:
-  1. Use `spl-token-2022::extension::transfer_fee::TransferFeeConfig` to read the fee configuration.
-2. Calculate the fee: `fee = amount * fee_basis_points / 10000`.
-3. Store the post-fee amount or the actual received amount in internal state.
-4. Consider using `TransferChecked` with the expected post-fee amount.
-
-  Manual verification:
-  - Identify which Token-2022 extensions can be enabled for accepted mints.
-  - Compare internal accounting with actual token balance deltas after transfer.
-  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
-
-#3 [HIGH] Unverified Signer Account: `new_admin`
+#1 [HIGH] Unverified Signer Account: `new_admin`
   at bench\programs\jito-restaking\restaking_program\src\ncn_set_secondary_admin.rs:168 (NcnSetSecondaryAdmin)
   confidence: Low
 
@@ -58,7 +55,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#4 [HIGH] Unchecked Authority Key: `new_admin`
+#2 [HIGH] Unchecked Authority Key: `new_admin`
   at bench\programs\jito-restaking\restaking_program\src\ncn_set_secondary_admin.rs:168 (NcnSetSecondaryAdmin)
   confidence: Low
 
@@ -72,7 +69,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#5 [HIGH] Unverified Signer Account: `new_admin`
+#3 [HIGH] Unverified Signer Account: `new_admin`
   at bench\programs\jito-restaking\restaking_program\src\operator_set_secondary_admin.rs:176 (OperatorSetSecondaryAdmin)
   confidence: Low
 
@@ -86,7 +83,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#6 [HIGH] Unchecked Authority Key: `new_admin`
+#4 [HIGH] Unchecked Authority Key: `new_admin`
   at bench\programs\jito-restaking\restaking_program\src\operator_set_secondary_admin.rs:176 (OperatorSetSecondaryAdmin)
   confidence: Low
 
@@ -100,7 +97,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#7 [HIGH] Unverified Signer Account: `new_admin`
+#5 [HIGH] Unverified Signer Account: `new_admin`
   at bench\programs\jito-restaking\restaking_program\src\set_config_admin.rs:192 (SetConfigAdmin)
   confidence: Low
 
@@ -114,7 +111,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#8 [HIGH] Unchecked Authority Key: `new_admin`
+#6 [HIGH] Unchecked Authority Key: `new_admin`
   at bench\programs\jito-restaking\restaking_program\src\set_config_admin.rs:192 (SetConfigAdmin)
   confidence: Low
 
@@ -128,7 +125,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#9 [MEDIUM] Unchecked Deserialization: `config`
+#7 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\initialize_ncn_vault_ticket.rs:33 (InitializeNcnVaultTicket)
   confidence: Low
 
@@ -142,7 +139,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#10 [MEDIUM] Unchecked Deserialization: `config`
+#8 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\initialize_ncn_vault_slasher_ticket.rs:33 (InitializeNcnVaultSlasherTicket)
   confidence: Low
 
@@ -156,7 +153,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#11 [MEDIUM] Unchecked Deserialization: `config`
+#9 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\initialize_operator_vault_ticket.rs:36 (InitializeOperatorVaultTicket)
   confidence: Low
 
@@ -170,7 +167,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#12 [MEDIUM] Unchecked Deserialization: `config`
+#10 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_ticket.rs:23 (WarmupNcnVaultTicket)
   confidence: Low
 
@@ -184,7 +181,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#13 [MEDIUM] Unchecked Deserialization: `ncn`
+#11 [MEDIUM] Unchecked Deserialization: `ncn`
   at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_ticket.rs:30 (WarmupNcnVaultTicket)
   confidence: Low
 
@@ -198,7 +195,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#14 [MEDIUM] Unchecked Deserialization: `config`
+#12 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_ticket.rs:34 (CooldownNcnVaultTicket)
   confidence: Low
 
@@ -212,7 +209,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#15 [MEDIUM] Unchecked Deserialization: `ncn`
+#13 [MEDIUM] Unchecked Deserialization: `ncn`
   at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_ticket.rs:26 (CooldownNcnVaultTicket)
   confidence: Low
 
@@ -226,7 +223,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#16 [MEDIUM] Unchecked Deserialization: `config`
+#14 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\ncn_warmup_operator.rs:33 (NcnWarmupOperator)
   confidence: Low
 
@@ -240,7 +237,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#17 [MEDIUM] Unchecked Deserialization: `ncn`
+#15 [MEDIUM] Unchecked Deserialization: `ncn`
   at bench\programs\jito-restaking\restaking_program\src\ncn_warmup_operator.rs:25 (NcnWarmupOperator)
   confidence: Low
 
@@ -254,7 +251,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#18 [MEDIUM] Unchecked Deserialization: `config`
+#16 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\ncn_cooldown_operator.rs:39 (NcnCooldownOperator)
   confidence: Low
 
@@ -268,7 +265,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#19 [MEDIUM] Unchecked Deserialization: `ncn`
+#17 [MEDIUM] Unchecked Deserialization: `ncn`
   at bench\programs\jito-restaking\restaking_program\src\ncn_cooldown_operator.rs:31 (NcnCooldownOperator)
   confidence: Low
 
@@ -282,7 +279,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#20 [MEDIUM] Unchecked Deserialization: `config`
+#18 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_slasher_ticket.rs:26 (WarmupNcnVaultSlasherTicket)
   confidence: Low
 
@@ -296,7 +293,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#21 [MEDIUM] Unchecked Deserialization: `ncn`
+#19 [MEDIUM] Unchecked Deserialization: `ncn`
   at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_slasher_ticket.rs:41 (WarmupNcnVaultSlasherTicket)
   confidence: Low
 
@@ -310,7 +307,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#22 [MEDIUM] Unchecked Deserialization: `config`
+#20 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_slasher_ticket.rs:25 (CooldownNcnVaultSlasherTicket)
   confidence: Low
 
@@ -324,7 +321,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#23 [MEDIUM] Unchecked Deserialization: `ncn`
+#21 [MEDIUM] Unchecked Deserialization: `ncn`
   at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_slasher_ticket.rs:39 (CooldownNcnVaultSlasherTicket)
   confidence: Low
 
@@ -338,7 +335,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#24 [MEDIUM] Unchecked Deserialization: `config`
+#22 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\warmup_operator_vault_ticket.rs:24 (WarmupOperatorVaultTicket)
   confidence: Low
 
@@ -352,7 +349,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#25 [MEDIUM] Unchecked Deserialization: `operator`
+#23 [MEDIUM] Unchecked Deserialization: `operator`
   at bench\programs\jito-restaking\restaking_program\src\warmup_operator_vault_ticket.rs:31 (WarmupOperatorVaultTicket)
   confidence: Low
 
@@ -366,7 +363,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#26 [MEDIUM] Unchecked Deserialization: `config`
+#24 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\cooldown_operator_vault_ticket.rs:25 (CooldownOperatorVaultTicket)
   confidence: Low
 
@@ -380,7 +377,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#27 [MEDIUM] Unchecked Deserialization: `operator`
+#25 [MEDIUM] Unchecked Deserialization: `operator`
   at bench\programs\jito-restaking\restaking_program\src\cooldown_operator_vault_ticket.rs:32 (CooldownOperatorVaultTicket)
   confidence: Low
 
@@ -394,7 +391,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#28 [MEDIUM] Unchecked Deserialization: `config`
+#26 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\operator_warmup_ncn.rs:33 (OperatorWarmupNcn)
   confidence: Low
 
@@ -408,7 +405,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#29 [MEDIUM] Unchecked Deserialization: `operator`
+#27 [MEDIUM] Unchecked Deserialization: `operator`
   at bench\programs\jito-restaking\restaking_program\src\operator_warmup_ncn.rs:25 (OperatorWarmupNcn)
   confidence: Low
 
@@ -422,7 +419,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#30 [MEDIUM] Unchecked Deserialization: `config`
+#28 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\restaking_program\src\operator_cooldown_ncn.rs:37 (OperatorCooldownNcn)
   confidence: Low
 
@@ -436,7 +433,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#31 [MEDIUM] Unchecked Deserialization: `operator`
+#29 [MEDIUM] Unchecked Deserialization: `operator`
   at bench\programs\jito-restaking\restaking_program\src\operator_cooldown_ncn.rs:29 (OperatorCooldownNcn)
   confidence: Low
 
@@ -450,7 +447,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#32 [MEDIUM] Unchecked Deserialization: `ncn_info`
+#30 [MEDIUM] Unchecked Deserialization: `ncn_info`
   at bench\programs\jito-restaking\restaking_program\src\ncn_delegate_token_account.rs:48 (NcnDelegateTokenAccount)
   confidence: Low
 
@@ -464,7 +461,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#33 [MEDIUM] Unchecked Deserialization: `operator_info`
+#31 [MEDIUM] Unchecked Deserialization: `operator_info`
   at bench\programs\jito-restaking\restaking_program\src\operator_delegate_token_account.rs:49 (OperatorDelegateTokenAccount)
   confidence: Low
 
@@ -478,5 +475,5 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-Summary: 33 findings: [HIGH] 8 HIGH | [MED] 25 MEDIUM
+Summary: 31 findings: [HIGH] 6 HIGH | [MED] 25 MEDIUM
 

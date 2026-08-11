@@ -9,8 +9,50 @@
   WARN No `#[derive(Accounts)]` structs found in the source.
 
 ┌
+├─ Native Instruction Handlers
+  --- Resolved 8 native instruction(s) from entrypoint bench\programs\wormhole\solana\bridge\program\src\lib.rs:86:
+  - Initialize  handler: initialize  [0x00]  accounts: 0 (!)
+  - PostMessage  handler: post_message  [0x01]  accounts: 0 (!)
+  - PostVAA  handler: post_vaa  [0x02]  accounts: 0 (!)
+  - SetFees  handler: set_fees  [0x03]  accounts: 0 (!)
+  - TransferFees  handler: transfer_fees  [0x04]  accounts: 0 (!)
+  - UpgradeContract  handler: upgrade_contract  [0x05]  accounts: 0 (!)
+  - UpgradeGuardianSet  handler: upgrade_guardian_set  [0x06]  accounts: 0 (!)
+  - VerifySignatures  handler: verify_signatures  [0x07]  accounts: 0 (!)
+  --- 8 instructions resolved (0 with resolved accounts)
+
+
+┌
 ├─ Findings
-#1 [INFO] No Token-2022 Usage Detected
+#1 [HIGH] Sysvar-Introspection Misuse: `load_current_index` parses caller-supplied account data without a sysvar address check
+  at bench\programs\wormhole\solana\bridge\program\src\api\verify_signature.rs:92 (verify_signatures)
+  confidence: Low
+
+  Function `verify_signatures` calls the unchecked sysvar-introspection helper `load_current_index` with a borrow of a caller-supplied account's raw data. The unchecked helpers parse arbitrary bytes with no sysvar-address check; the `_checked` variants begin by validating that the account is the real `sysvar::instructions` account. Passing attacker-supplied bytes here makes the introspection result (the "current instruction index" or the "instruction at index") attacker-controlled: an attacker can fabricate an account that spoofs the instruction list, which is how the Wormhole bridge (Feb 2022, ~$320M) forged a guardian-approved signature-verification state (see `docs/EXPLOIT_CORPUS.md`).
+
+  Suggestion:
+  Before parsing, the `_checked` variant only exists for `load_instruction_at`, so validate the account is the real instructions sysvar: `if acc.key != &solana_program::sysvar::instructions::id() { return Err(ProgramError::InvalidAccountData); }` and verify `acc.owner == &solana_program::sysvar::ID`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#2 [HIGH] Sysvar-Introspection Misuse: `load_instruction_at` parses caller-supplied account data without a sysvar address check
+  at bench\programs\wormhole\solana\bridge\program\src\api\verify_signature.rs:101 (verify_signatures)
+  confidence: Low
+
+  Function `verify_signatures` calls the unchecked sysvar-introspection helper `load_instruction_at` with a borrow of a caller-supplied account's raw data. The unchecked helpers parse arbitrary bytes with no sysvar-address check; the `_checked` variants begin by validating that the account is the real `sysvar::instructions` account. Passing attacker-supplied bytes here makes the introspection result (the "current instruction index" or the "instruction at index") attacker-controlled: an attacker can fabricate an account that spoofs the instruction list, which is how the Wormhole bridge (Feb 2022, ~$320M) forged a guardian-approved signature-verification state (see `docs/EXPLOIT_CORPUS.md`).
+
+  Suggestion:
+  Before parsing, use the checked variant `load_instruction_at_checked` (it begins with a `check_id` and rejects non-sysvar accounts), or validate the account is the real instructions sysvar: `if acc.key != &solana_program::sysvar::instructions::id() { return Err(ProgramError::InvalidAccountData); }` and verify `acc.owner == &solana_program::sysvar::ID`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#3 [INFO] No Token-2022 Usage Detected
   at Workspace root
   confidence: Medium
 
@@ -24,5 +66,5 @@
   - Compare internal accounting with actual token balance deltas after transfer.
   - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
 
-Summary: 1 finding: [INFO] 1 INFO
+Summary: 3 findings: [HIGH] 2 HIGH | [INFO] 1 INFO
 

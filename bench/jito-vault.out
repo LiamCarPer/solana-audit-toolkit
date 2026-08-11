@@ -9,25 +9,46 @@
   WARN No `#[derive(Accounts)]` structs found in the source.
 
 ┌
+├─ Native Instruction Handlers
+  --- Resolved 32 native instruction(s) from entrypoint bench\programs\jito-restaking\vault_program\src\lib.rs:87:
+  - InitializeConfig  handler: process_initialize_config  (no discriminator)  accounts: 5
+  - InitializeVault  handler: process_initialize_vault  (no discriminator)  accounts: 13
+  - InitializeVaultWithMint  handler: process_initialize_vault_with_mint  (no discriminator)  accounts: 0 (!)
+  - InitializeVaultNcnTicket  handler: process_initialize_vault_ncn_ticket  (no discriminator)  accounts: 8
+  - InitializeVaultOperatorDelegation  handler: process_initialize_vault_operator_delegation  (no discriminator)  accounts: 8
+  - InitializeVaultNcnSlasherTicket  handler: process_initialize_vault_ncn_slasher_ticket  (no discriminator)  accounts: 9
+  - InitializeVaultNcnSlasherOperatorTicket  handler: process_initialize_vault_ncn_slasher_operator_ticket  (no discriminator)  accounts: 9
+  - SetSecondaryAdmin  handler: process_set_secondary_admin  (no discriminator)  accounts: 4
+  - SetAdmin  handler: process_set_admin  (no discriminator)  accounts: 4
+  - SetDepositCapacity  handler: process_set_deposit_capacity  (no discriminator)  accounts: 3
+  - DelegateTokenAccount  handler: process_delegate_token_account  (no discriminator)  accounts: 7
+  - SetFees  handler: process_set_fees  (no discriminator)  accounts: 3
+  - SetProgramFee  handler: process_set_program_fee  (no discriminator)  accounts: 2
+  - SetProgramFeeWallet  handler: process_set_program_fee_wallet  (no discriminator)  accounts: 3
+  - SetIsPaused  handler: process_set_is_paused  (no discriminator)  accounts: 3
+  - MintTo  handler: process_mint  (no discriminator)  accounts: 10
+  - EnqueueWithdrawal  handler: process_enqueue_withdrawal  (no discriminator)  accounts: 10
+  - ChangeWithdrawalTicketOwner  handler: process_change_withdrawal_ticket_owner  (no discriminator)  accounts: 5
+  - BurnWithdrawalTicket  handler: process_burn_withdrawal_ticket  (no discriminator)  accounts: 13
+  - WarmupVaultNcnTicket  handler: process_warmup_vault_ncn_ticket  (no discriminator)  accounts: 5
+  - CooldownVaultNcnTicket  handler: process_cooldown_vault_ncn_ticket  (no discriminator)  accounts: 5
+  - WarmupVaultNcnSlasherTicket  handler: process_warmup_vault_ncn_slasher_ticket  (no discriminator)  accounts: 6
+  - CooldownVaultNcnSlasherTicket  handler: process_cooldown_vault_ncn_slasher_ticket  (no discriminator)  accounts: 6
+  - AddDelegation  handler: process_add_delegation  (no discriminator)  accounts: 5
+  - CooldownDelegation  handler: process_cooldown_delegation  (no discriminator)  accounts: 5
+  - UpdateVaultBalance  handler: process_update_vault_balance  (no discriminator)  accounts: 6
+  - InitializeVaultUpdateStateTracker  handler: process_initialize_vault_update_state_tracker  (no discriminator)  accounts: 5
+  - CrankVaultUpdateStateTracker  handler: process_crank_vault_update_state_tracker  (no discriminator)  accounts: 5
+  - CloseVaultUpdateStateTracker  handler: process_close_vault_update_state_tracker  (no discriminator)  accounts: 4
+  - CreateTokenMetadata  handler: process_create_token_metadata  (no discriminator)  accounts: 7
+  - UpdateTokenMetadata  handler: process_update_token_metadata  (no discriminator)  accounts: 5
+  - SetConfigAdmin  handler: process_set_config_admin  (no discriminator)  accounts: 3
+  --- 32 instructions resolved (31 with resolved accounts)
+
+
+┌
 ├─ Findings
-#1 [HIGH] Potential Transfer Fee Bypass: `process_delegate_token_account` transfers Token-2022 tokens without fee handling
-  at bench\programs\jito-restaking\vault_program\src\delegate_token_account.rs (process_delegate_token_account)
-  confidence: Medium
-
-  The instruction `process_delegate_token_account` appears to transfer Token-2022 tokens but does not contain any transfer fee calculation logic (no references to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, etc.). Token-2022 mints can have transfer fees configured, and the actual amount received by the recipient will be less than the amount transferred. Without fee handling, internal accounting may silently drift from on-chain balances, allowing fund extraction or protocol insolvency.
-
-  Suggestion:
-  1. Use `spl-token-2022::extension::transfer_fee::TransferFeeConfig` to read the fee configuration.
-2. Calculate the fee: `fee = amount * fee_basis_points / 10000`.
-3. Store the post-fee amount or the actual received amount in internal state.
-4. Consider using `TransferChecked` with the expected post-fee amount.
-
-  Manual verification:
-  - Identify which Token-2022 extensions can be enabled for accepted mints.
-  - Compare internal accounting with actual token balance deltas after transfer.
-  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
-
-#2 [HIGH] Unverified Signer Account: `new_admin`
+#1 [HIGH] Unverified Signer Account: `new_admin`
   at bench\programs\jito-restaking\vault_program\src\set_secondary_admin.rs:149 (SetSecondaryAdmin)
   confidence: Low
 
@@ -41,7 +62,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#3 [HIGH] Unchecked Authority Key: `new_admin`
+#2 [HIGH] Unchecked Authority Key: `new_admin`
   at bench\programs\jito-restaking\vault_program\src\set_secondary_admin.rs:149 (SetSecondaryAdmin)
   confidence: Low
 
@@ -55,7 +76,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#4 [HIGH] Unverified Signer Account: `new_owner`
+#3 [HIGH] Unverified Signer Account: `new_owner`
   at bench\programs\jito-restaking\vault_program\src\change_withdrawal_ticket_owner.rs:205 (ChangeWithdrawalTicketOwner)
   confidence: Low
 
@@ -69,7 +90,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#5 [HIGH] Unchecked Authority Key: `new_owner`
+#4 [HIGH] Unchecked Authority Key: `new_owner`
   at bench\programs\jito-restaking\vault_program\src\change_withdrawal_ticket_owner.rs:205 (ChangeWithdrawalTicketOwner)
   confidence: Low
 
@@ -83,7 +104,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#6 [HIGH] Unverified Signer Account: `new_admin`
+#5 [HIGH] Unverified Signer Account: `new_admin`
   at bench\programs\jito-restaking\vault_program\src\set_config_admin.rs:279 (SetConfigAdmin)
   confidence: Low
 
@@ -97,7 +118,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#7 [HIGH] Unchecked Authority Key: `new_admin`
+#6 [HIGH] Unchecked Authority Key: `new_admin`
   at bench\programs\jito-restaking\vault_program\src\set_config_admin.rs:279 (SetConfigAdmin)
   confidence: Low
 
@@ -111,7 +132,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#8 [HIGH] Self-Referential Validation: `config_admin`
+#7 [HIGH] Self-Referential Validation: `config_admin`
   at bench\programs\jito-restaking\vault_program\src\set_program_fee.rs:179 (SetProgramFee)
   confidence: Low
 
@@ -125,7 +146,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#9 [HIGH] Self-Referential Validation: `config_fee_admin`
+#8 [HIGH] Self-Referential Validation: `config_fee_admin`
   at bench\programs\jito-restaking\vault_program\src\set_program_fee_wallet.rs:183 (SetProgramFeeWallet)
   confidence: Low
 
@@ -139,7 +160,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#10 [MEDIUM] Unchecked Deserialization: `config`
+#9 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\initialize_vault_ncn_ticket.rs:36 (InitializeVaultNcnTicket)
   confidence: Low
 
@@ -153,7 +174,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#11 [MEDIUM] Unchecked Deserialization: `config`
+#10 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\initialize_vault_operator_delegation.rs:31 (InitializeVaultOperatorDelegation)
   confidence: Low
 
@@ -167,7 +188,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#12 [MEDIUM] Unchecked Deserialization: `config`
+#11 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\initialize_vault_ncn_slasher_ticket.rs:31 (InitializeVaultNcnSlasherTicket)
   confidence: Low
 
@@ -181,7 +202,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#13 [MEDIUM] Unchecked Deserialization: `ncn_slasher_ticket`
+#12 [MEDIUM] Unchecked Deserialization: `ncn_slasher_ticket`
   at bench\programs\jito-restaking\vault_program\src\initialize_vault_ncn_slasher_ticket.rs:91 (InitializeVaultNcnSlasherTicket)
   confidence: Low
 
@@ -195,7 +216,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#14 [MEDIUM] Unchecked Deserialization: `config`
+#13 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\initialize_vault_ncn_slasher_operator_ticket.rs:32 (InitializeVaultNcnSlasherOperatorTicket)
   confidence: Low
 
@@ -209,7 +230,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#15 [MEDIUM] Unchecked Deserialization: `vault_info`
+#14 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\initialize_vault_ncn_slasher_operator_ticket.rs:35 (InitializeVaultNcnSlasherOperatorTicket)
   confidence: Low
 
@@ -223,7 +244,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#16 [MEDIUM] Unchecked Deserialization: `vault_info`
+#15 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\delegate_token_account.rs:50 (DelegateTokenAccount)
   confidence: Low
 
@@ -237,7 +258,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#17 [MEDIUM] Unchecked Deserialization: `config`
+#16 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\set_fees.rs:30 (SetFees)
   confidence: Low
 
@@ -251,7 +272,35 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#18 [MEDIUM] Unchecked Deserialization: `vault_info`
+#17 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\vault_program\src\mint_to.rs:53 (MintTo)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `MintTo` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#18 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\vault_program\src\enqueue_withdrawal.rs:46 (EnqueueWithdrawal)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `EnqueueWithdrawal` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#19 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\change_withdrawal_ticket_owner.rs:22 (ChangeWithdrawalTicketOwner)
   confidence: Low
 
@@ -265,7 +314,49 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#19 [MEDIUM] Unchecked Deserialization: `config`
+#20 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\vault_program\src\burn_withdrawal_ticket.rs:39 (BurnWithdrawalTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `BurnWithdrawalTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#21 [MEDIUM] Unchecked Deserialization: `vault_staker_withdrawal_ticket_info`
+  at bench\programs\jito-restaking\vault_program\src\burn_withdrawal_ticket.rs:55 (BurnWithdrawalTicket)
+  confidence: Low
+
+  `vault_staker_withdrawal_ticket_info` is deserialized with `try_from_slice_unchecked` in `BurnWithdrawalTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if vault_staker_withdrawal_ticket_info.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#22 [MEDIUM] Unchecked Deserialization: `vault_staker_withdrawal_ticket_token_account`
+  at bench\programs\jito-restaking\vault_program\src\burn_withdrawal_ticket.rs:65 (BurnWithdrawalTicket)
+  confidence: Low
+
+  `vault_staker_withdrawal_ticket_token_account` is deserialized with `unpack` in `BurnWithdrawalTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `unpack` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if vault_staker_withdrawal_ticket_token_account.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#23 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\warmup_vault_ncn_ticket.rs:22 (WarmupVaultNcnTicket)
   confidence: Low
 
@@ -279,7 +370,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#20 [MEDIUM] Unchecked Deserialization: `vault`
+#24 [MEDIUM] Unchecked Deserialization: `vault`
   at bench\programs\jito-restaking\vault_program\src\warmup_vault_ncn_ticket.rs:29 (WarmupVaultNcnTicket)
   confidence: Low
 
@@ -293,7 +384,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#21 [MEDIUM] Unchecked Deserialization: `config`
+#25 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\cooldown_vault_ncn_ticket.rs:28 (CooldownVaultNcnTicket)
   confidence: Low
 
@@ -307,7 +398,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#22 [MEDIUM] Unchecked Deserialization: `vault_info`
+#26 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\cooldown_vault_ncn_ticket.rs:31 (CooldownVaultNcnTicket)
   confidence: Low
 
@@ -321,7 +412,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#23 [MEDIUM] Unchecked Deserialization: `config`
+#27 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\warmup_vault_ncn_slasher_ticket.rs:25 (WarmupVaultNcnSlasherTicket)
   confidence: Low
 
@@ -335,7 +426,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#24 [MEDIUM] Unchecked Deserialization: `vault_info`
+#28 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\warmup_vault_ncn_slasher_ticket.rs:28 (WarmupVaultNcnSlasherTicket)
   confidence: Low
 
@@ -349,7 +440,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#25 [MEDIUM] Unchecked Deserialization: `config`
+#29 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\cooldown_vault_ncn_slasher_ticket.rs:26 (CooldownVaultNcnSlasherTicket)
   confidence: Low
 
@@ -363,7 +454,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#26 [MEDIUM] Unchecked Deserialization: `vault_info`
+#30 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\cooldown_vault_ncn_slasher_ticket.rs:29 (CooldownVaultNcnSlasherTicket)
   confidence: Low
 
@@ -377,7 +468,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#27 [MEDIUM] Unchecked Deserialization: `config`
+#31 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\add_delegation.rs:37 (AddDelegation)
   confidence: Low
 
@@ -391,7 +482,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#28 [MEDIUM] Unchecked Deserialization: `config`
+#32 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\cooldown_delegation.rs:37 (CooldownDelegation)
   confidence: Low
 
@@ -405,7 +496,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#29 [MEDIUM] Unchecked Deserialization: `config`
+#33 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\update_vault_balance.rs:26 (UpdateVaultBalance)
   confidence: Low
 
@@ -419,7 +510,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#30 [MEDIUM] Unchecked Deserialization: `vault_token_account`
+#34 [MEDIUM] Unchecked Deserialization: `vault_token_account`
   at bench\programs\jito-restaking\vault_program\src\update_vault_balance.rs:44 (UpdateVaultBalance)
   confidence: Low
 
@@ -433,7 +524,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#31 [MEDIUM] Unchecked Deserialization: `config`
+#35 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\initialize_vault_update_state_tracker.rs:30 (InitializeVaultUpdateStateTracker)
   confidence: Low
 
@@ -447,7 +538,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#32 [MEDIUM] Unchecked Deserialization: `config`
+#36 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\crank_vault_update_state_tracker.rs:30 (CrankVaultUpdateStateTracker)
   confidence: Low
 
@@ -461,7 +552,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#33 [MEDIUM] Unchecked Deserialization: `config`
+#37 [MEDIUM] Unchecked Deserialization: `config`
   at bench\programs\jito-restaking\vault_program\src\close_update_state_tracker.rs:27 (CloseVaultUpdateStateTracker)
   confidence: Low
 
@@ -475,7 +566,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#34 [MEDIUM] Unchecked Deserialization: `vault_update_state_tracker_info`
+#38 [MEDIUM] Unchecked Deserialization: `vault_update_state_tracker_info`
   at bench\programs\jito-restaking\vault_program\src\close_update_state_tracker.rs:40 (CloseVaultUpdateStateTracker)
   confidence: Low
 
@@ -489,7 +580,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#35 [MEDIUM] Unchecked Deserialization: `vault_info`
+#39 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\create_token_metadata.rs:29 (CreateTokenMetadata)
   confidence: Low
 
@@ -503,7 +594,7 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-#36 [MEDIUM] Unchecked Deserialization: `vault_info`
+#40 [MEDIUM] Unchecked Deserialization: `vault_info`
   at bench\programs\jito-restaking\vault_program\src\update_token_metadata.rs:28 (UpdateTokenMetadata)
   confidence: Low
 
@@ -517,5 +608,5 @@
   - Check whether equivalent manual validation exists outside Anchor attributes.
   - Create the smallest transaction or unit test that proves exploitability.
 
-Summary: 36 findings: [HIGH] 9 HIGH | [MED] 27 MEDIUM
+Summary: 40 findings: [HIGH] 8 HIGH | [MED] 32 MEDIUM
 
