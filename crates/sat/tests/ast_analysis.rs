@@ -1183,6 +1183,70 @@ fn test_token2022_control_fixture_keeps_negative_signal() {
 }
 
 #[test]
+fn test_token2022_approve_only_no_fee_bypass_finding() {
+    use std::fs;
+
+    let path = "tests/fixtures_ast/clean/token2022_approve_only.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let parsed = syn::parse_file(&source).unwrap();
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let parsed_files = vec![(parsed, path.to_string())];
+
+    let findings = sat::token2022::analyze(std::path::Path::new("tests/fixtures_ast/clean"), &parsed_files, &accounts);
+
+    let fee_bypass: Vec<_> = findings.iter().filter(|f| f.title.contains("Transfer Fee Bypass")).collect();
+    assert!(
+        fee_bypass.is_empty(),
+        "approve/delegate-only Token-2022 usage must not be flagged as a transfer fee bypass: {findings:#?}"
+    );
+}
+
+#[test]
+fn test_token2022_transfer_unhandled_still_fires() {
+    use std::fs;
+
+    let path = "tests/fixtures_ast/vulnerable/token2022_transfer_unhandled.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let parsed = syn::parse_file(&source).unwrap();
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let parsed_files = vec![(parsed, path.to_string())];
+
+    let findings =
+        sat::token2022::analyze(std::path::Path::new("tests/fixtures_ast/vulnerable"), &parsed_files, &accounts);
+
+    let fee_bypass: Vec<_> = findings.iter().filter(|f| f.title.contains("Transfer Fee Bypass")).collect();
+    assert_eq!(fee_bypass.len(), 1, "transfer_checked with no fee handling must still be flagged: {findings:#?}");
+    assert_eq!(fee_bypass[0].severity, Severity::High);
+    assert!(
+        fee_bypass[0].title.contains("transfer_tokens_unhandled"),
+        "finding must name the transferring fn: {}",
+        fee_bypass[0].title
+    );
+}
+
+#[test]
+fn test_token2022_transfer_with_fee_handling_no_finding() {
+    use std::fs;
+
+    let path = "tests/fixtures_ast/clean/token2022_transfer_with_fee_handling.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let parsed = syn::parse_file(&source).unwrap();
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let parsed_files = vec![(parsed, path.to_string())];
+
+    let findings = sat::token2022::analyze(std::path::Path::new("tests/fixtures_ast/clean"), &parsed_files, &accounts);
+
+    let fee_bypass: Vec<_> = findings.iter().filter(|f| f.title.contains("Transfer Fee Bypass")).collect();
+    assert!(
+        fee_bypass.is_empty(),
+        "transfer_checked with TransferFeeConfig/fee math must be suppressed: {findings:#?}"
+    );
+}
+
+#[test]
 fn test_interface_account_detection_positive_and_negative() {
     let positive = r#"
 #[derive(Accounts)]

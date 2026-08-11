@@ -200,6 +200,47 @@ fn scan_trait_items(
     }
 }
 
+/// Substring markers (lowercased) that identify a genuine Token-2022
+/// balance-moving operation inside a function body. The transfer-fee-bypass
+/// check only runs over functions that match one of these; mere Token-2022
+/// references (`unpack`, `check_spl_token_program_account`, `approve`,
+/// `ApproveChecked`, extension reads, etc.) never qualify, because approving
+/// a delegate moves no balances and cannot trigger a transfer fee.
+///
+/// Matching runs against the `quote!` rendering of the fn block, in which
+/// path separators are spaced (`spl_token_2022_interface :: instruction ::
+/// transfer_checked`) but identifiers are intact, so markers are identifier
+/// spellings:
+/// - `transfer_checked` — the snake_case fn call, whatever the path
+///   (`spl_token_2022_interface::instruction::transfer_checked`,
+///   `spl_token_2022::instruction::transfer_checked`,
+///   `token_2022::transfer_checked`);
+/// - `transferchecked` — the PascalCase CPI accounts struct `TransferChecked`;
+/// - `transfer_with_seed` / `transferwithseed` — TransferWithSeed variants;
+/// - `:: transfer (` — path-qualified `::transfer(` instruction constructors
+///   (SPL Token-2022 program calls);
+/// - `transfer (3)` / `transfer_checked (12)` — raw discriminator-style
+///   variants `Transfer(3)` / `TransferChecked(12)`.
+///
+/// Deliberately NOT matched: `spl_token_interface::instruction::transfer`
+/// (classic SPL token — no transfer fee extension) and
+/// `solana_system_interface::instruction::transfer` (SOL lamports) — both
+/// render without any Token-2022 identifier, and bodies referencing them must
+/// additionally carry a Token-2022 usage marker to reach this check.
+const TRANSFER_LIKE_MARKERS: &[&str] = &[
+    "transfer_checked",
+    "transferchecked",
+    "transfer_with_seed",
+    "transferwithseed",
+    ":: transfer (",
+    "transfer (3)",
+    "transfer_checked (12)",
+];
+
+fn is_transfer_like(body_lower: &str) -> bool {
+    TRANSFER_LIKE_MARKERS.iter().any(|m| body_lower.contains(m))
+}
+
 /// Scan a single function body for Token-2022 usage markers and
 /// interface-account references.
 fn scan_fn_body(
@@ -211,12 +252,18 @@ fn scan_fn_body(
     token2022_transfer_instructions: &mut Vec<(String, String, String)>,
 ) {
     let body_source = quote!(#block).to_string();
-    let has_token2022_transfer = body_source.to_lowercase().contains("token_2022")
-        || body_source.contains("TokenzQd")
-        || body_source.to_lowercase().contains("spl_token_2022");
+    let body_lower = body_source.to_lowercase();
+    let has_token2022_usage =
+        body_lower.contains("token_2022") || body_source.contains("TokenzQd") || body_lower.contains("spl_token_2022");
 
-    if has_token2022_transfer {
+    if has_token2022_usage {
         *found_token2022_usage = true;
+    }
+
+    // Only functions that actually construct/invoke a Token-2022 transfer
+    // instruction are transfer-fee-bypass candidates. approve/approve_checked
+    // (delegation) and pure reads/unpacks must never be reported as transfers.
+    if has_token2022_usage && is_transfer_like(&body_lower) {
         token2022_transfer_instructions.push((func_name.to_string(), body_source.clone(), file_path.to_string()));
     }
 
@@ -279,6 +326,8 @@ pub fn check_transfer_fee_bypass(token2022_transfers: &[(String, String, String)
     let fee_keywords = [
         "transfer_fee",
         "transfer_fee_amount",
+        "transferfeeconfig", // `TransferFeeConfig` (bare or module-qualified)
+        "gettransferfee",    // `get_transfer_fee(epoch)` from the transfer-fee extension
         "calculate_fee",
         "fee_basis_points",
         "max_fee",
@@ -302,9 +351,11 @@ pub fn check_transfer_fee_bypass(token2022_transfers: &[(String, String, String)
                 ),
                 severity: Severity::High,
                 description: format!(
-                    "The instruction `{ix_name}` appears to transfer Token-2022 tokens but \
-                     does not contain any transfer fee calculation logic (no references \
-                     to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, \
+                    "The instruction `{ix_name}` invokes a Token-2022 transfer \
+                     (`transfer`, `transfer_checked`, or `transfer_with_seed` via the \
+                     SPL Token-2022 program) but does not contain any transfer fee \
+                     calculation logic (no references to `transfer_fee`, `TransferFeeConfig`, \
+                     `calculate_fee`, `get_transfer_fee`, `fee_basis_points`, `amount_after_fee`, \
                      etc.). Token-2022 mints can have transfer fees configured, and the actual \
                      amount received by the recipient will be less than the amount transferred. \
                      Without fee handling, internal accounting may silently drift from on-chain \
