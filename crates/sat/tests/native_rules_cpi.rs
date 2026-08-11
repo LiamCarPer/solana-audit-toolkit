@@ -825,3 +825,73 @@ fn deser_guard_is_attributed_only_to_the_fed_account() {
     assert_eq!(sat030.len(), 1, "{findings:?}");
     assert!(sat030[0].description.contains("process_a"), "{}", sat030[0].description);
 }
+
+// ── SAT030 close/reinit program-level suppression ───────────────────────────
+
+#[test]
+fn sat030_multi_writer_config_without_close_path_is_suppressed() {
+    // Two writers of `config`, each guarded only through a `Config::load`-style
+    // call the analyzer cannot see into (Jito's global-config pattern), and no
+    // close/assign/reinit path anywhere: SAT030's closed-and-recreated premise
+    // is impossible, so the finding must be suppressed.
+    let (program, findings) = run_fixture("multi_writer_config.rs");
+
+    assert_eq!(program.instructions.len(), 2, "two config writers resolved");
+    for ix in &program.instructions {
+        assert!(account(ix, "config").written, "{} must write config", ix.name);
+    }
+    assert!(by_rule(&findings, SAT030).is_empty(), "{findings:?}");
+}
+
+#[test]
+fn sat030_close_path_control_still_reports() {
+    // Same multi-writer `config` shape, plus a close instruction that
+    // reassigns `config` to the system program (`close_program_account`
+    // call shape): the close+recreate premise exists, so SAT030 fires.
+    let (program, findings) = run_fixture("close_reinit_control.rs");
+
+    assert_eq!(program.instructions.len(), 3, "two writers + one close handler");
+    assert_eq!(program.instructions[2].name, "process_close_config");
+    let sat030 = by_rule(&findings, SAT030);
+    assert_eq!(sat030.len(), 1, "{findings:?}");
+    assert!(sat030[0].title.contains("`config`"), "{}", sat030[0].title);
+    assert!(
+        sat030[0].description.contains("process_set_fee") && sat030[0].description.contains("process_set_admin"),
+        "description lists the config writers: {}",
+        sat030[0].description
+    );
+}
+
+// ── SAT028 checked-invoke_signed suppression ────────────────────────────────
+
+#[test]
+fn sat028_pda_authority_invoke_signed_fixture_is_clean() {
+    // Canonical vault PDA as token authority, signed with checked
+    // `invoke_signed` (the Jito `UpdateVaultBalance` mint_to pattern): the
+    // runtime derives the authority from the seeds, so SAT028 stays quiet.
+    let (program, findings) = run_fixture("pda_authority_invoke_signed.rs");
+
+    assert_eq!(program.instructions.len(), 1);
+    let update = &program.instructions[0];
+    // The `Vault::load` guard is invisible to the analyzer (no signer check,
+    // no key compare, not resolved as a PDA) — the checked-`invoke_signed`
+    // suppression is what must keep SAT028 quiet.
+    let authority = account(update, "authority");
+    assert!(!authority.is_signer_checked && !authority.key_checked && !authority.is_pda);
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+#[test]
+fn sat028_unverified_authority_control_still_reports() {
+    // Plain `invoke`, non-PDA authority, no signer/key constraint: the
+    // suppression must not swallow this — SAT028 still fires.
+    let (program, findings) = run_fixture("unverified_authority_control.rs");
+
+    assert_eq!(program.instructions.len(), 1);
+    let transfer = &program.instructions[0];
+    assert!(!account(transfer, "authority").is_pda, "control authority must NOT resolve as a PDA");
+    let sat028 = by_rule(&findings, SAT028);
+    assert_eq!(sat028.len(), 1, "{findings:?}");
+    assert!(sat028[0].title.contains("authority"), "{}", sat028[0].title);
+    assert_eq!(findings.len(), 1, "no other findings expected: {findings:?}");
+}

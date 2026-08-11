@@ -8,11 +8,20 @@
 //!
 //! - SAT028 — a token-program CPI (transfer/mint_to/burn/set_authority) whose
 //!   authority account is neither signer-checked nor key-compared, or a PDA
-//!   signed with plain `invoke` instead of `invoke_signed`.
+//!   signed with plain `invoke`/`invoke_signed_unchecked` instead of the
+//!   checked `invoke_signed`. A checked `invoke_signed` is never reported:
+//!   the runtime derives the authority from the seeds, so the caller cannot
+//!   name an arbitrary account (this covers PDA authorities the frontend
+//!   resolved as well as PDAs guarded only through a `load`-style helper in
+//!   another crate, which resolve as non-PDA).
 //! - SAT029 — a CPI whose `program_id` is the program's own declared id
 //!   (self-invocation / sub-dispatch re-entry).
 //! - SAT030 — a state account written by ≥ 2 instructions where at least one
-//!   writer lacks an init/discriminator guard.
+//!   writer lacks an init/discriminator guard. Suppressed for account classes
+//!   with no close/reinit path anywhere in the program (no `close` handler,
+//!   no `close_*`/`assign` call, no `realloc`/`data_is_empty` reinit marker):
+//!   without a close+recreate path the "closed-and-recreated /
+//!   attacker-funded reinit" premise is impossible.
 //!
 //! CPI shapes understood:
 //! - `invoke(&Instruction { program_id, accounts, data }, &[...])` struct
@@ -420,10 +429,12 @@ struct InvokeSite {
 }
 
 impl InvokeSite {
-    /// True when the call provides seeds (`invoke_signed*`), so a PDA
-    /// authority can actually sign.
-    fn is_signed(&self) -> bool {
-        self.callee != "invoke"
+    /// True when the call is the *checked* `invoke_signed`: the runtime
+    /// derives the signature from the given seeds and rejects the CPI unless
+    /// the signed account's pubkey equals the derived PDA. Plain `invoke` and
+    /// `invoke_signed_unchecked` skip that validation and stay reportable.
+    fn is_checked_signed(&self) -> bool {
+        self.callee == "invoke_signed"
     }
 }
 
@@ -889,7 +900,17 @@ fn sat028_029(
             continue;
         }
         let Some(account) = ix.accounts.iter().find(|a| a.name == base) else { continue };
-        if account.is_pda && !site.is_signed() {
+        // FP filter: a checked `invoke_signed` cannot name an attacker-chosen
+        // authority — the runtime derives the signature from the seeds, so the
+        // CPI succeeds only when the authority pubkey equals the derived PDA.
+        // This covers PDAs the frontend resolved (`is_pda == true`) and PDAs
+        // guarded only through a `load`-style helper the analyzer cannot see
+        // into (the Jito `Vault::load` pattern), which resolve as non-PDA.
+        // `invoke_signed_unchecked` skips seed validation and stays reportable.
+        if site.is_checked_signed() {
+            continue;
+        }
+        if account.is_pda {
             findings.push(sat028_finding(ix, site, op, &account.name, true));
         } else if !account.is_signer_checked && !account.key_checked && !meta_signer {
             findings.push(sat028_finding(ix, site, op, &account.name, false));
@@ -1157,7 +1178,117 @@ fn sat030_finding(name: &str, writers: &[(&NativeInstruction, bool)]) -> Finding
     }
 }
 
+/// Close-ish / reinit-path markers for the SAT030 program-level suppression.
+///
+/// SAT030's premise — "a previously initialized, closed-and-recreated, or
+/// attacker-funded account is accepted and overwritten as if it were fresh" —
+/// requires an actual close or reassignment path somewhere in the program: a
+/// `close` instruction handler, a `close_*` / `assign` call, or an explicit
+/// reinit path (`realloc`, or a fresh-only `data_is_empty()` init write).
+/// When an account class (SAT030's name group) has none of these anywhere in
+/// the program, the finding is suppressed for that class.
+fn close_reinit_classes(program: &NativeProgram, index: &FnIndex) -> HashSet<String> {
+    let mut closeable = HashSet::new();
+    for ix in &program.instructions {
+        let Some((handler, file_idx)) = index.lookup(&ix.handler, &ix.file) else { continue };
+        let blocks = handler_blocks(handler, file_idx, index);
+
+        // Close-ish instruction: the handler/instruction name says close.
+        let name_closeish =
+            ix.name.to_ascii_lowercase().contains("close") || ix.handler.to_ascii_lowercase().contains("close");
+
+        // Close calls and system-program `assign` reassignments: the call's
+        // target account is the class that gets a close path.
+        let mut call_targets = Vec::new();
+        for (block, _) in &blocks {
+            collect_close_reinit_targets(block, &mut call_targets);
+        }
+        for target in call_targets {
+            closeable.insert(target);
+        }
+
+        // A close-named instruction also makes every account it writes
+        // closeable (the close path can zero/reassign state directly).
+        if name_closeish {
+            for account in &ix.accounts {
+                if account.written {
+                    closeable.insert(account.name.clone());
+                }
+            }
+        }
+
+        // Explicit reinit paths on the accounts the instruction writes.
+        for account in &ix.accounts {
+            if account.written && blocks.iter().any(|(block, _)| block_has_reinit_path(block, &account.name)) {
+                closeable.insert(account.name.clone());
+            }
+        }
+    }
+    closeable
+}
+
+/// Collect the close/reassign target account names of one block: the second
+/// argument of `close_*` calls (`close_program_account(program_id, account,
+/// payer)`, `close_account(program_id, account, ...)`), the receiver of a
+/// `close()` method call, and the first argument of a system-program `assign`
+/// call.
+fn collect_close_reinit_targets(block: &syn::Block, out: &mut Vec<String>) {
+    walk_block_all(
+        block,
+        &mut |e| match e {
+            syn::Expr::Call(c) => {
+                let key = expr_key(&c.func).unwrap_or_default();
+                let last = key.rsplit("::").next().unwrap_or(&key).to_ascii_lowercase();
+                if last.contains("close") {
+                    if let Some(target) = c.args.get(1).and_then(base_ident) {
+                        out.push(target);
+                    }
+                } else if last == "assign"
+                    && let Some(target) = c.args.first().and_then(base_ident)
+                {
+                    out.push(target);
+                }
+            }
+            syn::Expr::MethodCall(m) => {
+                if m.method == "close"
+                    && let Some(base) = base_ident(&m.receiver)
+                {
+                    out.push(base);
+                }
+            }
+            _ => {}
+        },
+        &mut |_| {},
+    );
+}
+
+/// True when the block has an explicit reinit path for `acc`: a `realloc` on
+/// the account, or a fresh-only `data_is_empty()` guard (the init side of a
+/// close+recreate cycle).
+fn block_has_reinit_path(block: &syn::Block, acc: &str) -> bool {
+    let derived = collect_derived_locals(block, acc);
+    let mut found = false;
+    walk_block_all(
+        block,
+        &mut |e| {
+            if found {
+                return;
+            }
+            if let syn::Expr::MethodCall(m) = e
+                && matches!(m.method.to_string().as_str(), "realloc" | "data_is_empty")
+                && let Some(base) = base_ident(&m.receiver)
+                && (base == acc || derived.contains(&base))
+            {
+                found = true;
+            }
+        },
+        &mut |_| {},
+    );
+    found
+}
+
 fn sat030(program: &NativeProgram, index: &FnIndex) -> Vec<Finding> {
+    let closeable = close_reinit_classes(program, index);
     let mut groups: HashMap<String, Vec<(&NativeInstruction, bool)>> = HashMap::new();
     for ix in &program.instructions {
         let Some((handler, file_idx)) = index.lookup(&ix.handler, &ix.file) else { continue };
@@ -1173,6 +1304,12 @@ fn sat030(program: &NativeProgram, index: &FnIndex) -> Vec<Finding> {
     for (name, writers) in groups {
         // FP filter: skip when every writer carries an init/discriminator guard.
         if writers.len() < 2 || writers.iter().all(|(_, guarded)| *guarded) {
+            continue;
+        }
+        // FP filter: no close/reinit path exists for this account class, so
+        // the "closed-and-recreated / attacker-funded reinit" premise is
+        // impossible — do not report SAT030 for it.
+        if !closeable.contains(&name) {
             continue;
         }
         findings.push(sat030_finding(&name, &writers));
