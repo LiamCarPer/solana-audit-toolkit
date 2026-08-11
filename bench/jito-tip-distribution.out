@@ -1,0 +1,234 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench\programs\jito-programs\mev-programs\programs\tip-distribution\src
+  --- Scanning 4 source file(s)...
+
+┌
+├─ Accounts Structs
+  --- Found 10 Accounts struct(s) in 4 file(s):
+
+  - CloseClaimStatus  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:405
+      - config: Account<info, Config>
+      - claim_status: Account<info, ClaimStatus> [mut]
+      - claim_status_payer: UncheckedAccount<info> [mut, UncheckedAccount]
+
+  - Initialize  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:425
+      - config: Account<info, Config> [init]
+      - system_program: Program<info, System>
+      - initializer: Signer<info> [mut]
+
+  - InitializeTipDistributionAccount  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:448
+      - config: Account<info, Config>
+      - tip_distribution_account: Account<info, TipDistributionAccount> [init]
+      - validator_vote_account: AccountInfo<info> [AccountInfo]
+      - signer: Signer<info> [mut]
+      - system_program: Program<info, System>
+
+  - UpdateConfig  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:477
+      - config: Account<info, Config> [mut]
+      - authority: Signer<info> [mut]
+
+  - CloseTipDistributionAccount  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:497
+      - config: Account<info, Config>
+      - expired_funds_account: AccountInfo<info> [mut, AccountInfo]
+      - tip_distribution_account: Account<info, TipDistributionAccount> [mut]
+      - validator_vote_account: AccountInfo<info> [mut, AccountInfo]
+      - signer: Signer<info> [mut]
+
+  - Claim  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:537
+      - config: Account<info, Config>
+      - tip_distribution_account: Account<info, TipDistributionAccount> [mut]
+      - merkle_root_upload_authority: Signer<info>
+      - claim_status: Account<info, ClaimStatus> [init]
+      - claimant: AccountInfo<info> [mut, AccountInfo]
+      - payer: Signer<info> [mut]
+      - system_program: Program<info, System>
+
+  - UploadMerkleRoot  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:587
+      - config: Account<info, Config>
+      - tip_distribution_account: Account<info, TipDistributionAccount> [mut]
+      - merkle_root_upload_authority: Signer<info> [mut]
+
+  - InitializeMerkleRootUploadConfig  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:613
+      - config: Account<info, Config> [mut]
+      - merkle_root_upload_config: Account<info, MerkleRootUploadConfig> [init]
+      - authority: Signer<info>
+      - payer: Signer<info> [mut]
+      - system_program: Program<info, System>
+
+  - UpdateMerkleRootUploadConfig  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:648
+      - config: Account<info, Config>
+      - merkle_root_upload_config: Account<info, MerkleRootUploadConfig> [mut]
+      - authority: Signer<info>
+      - system_program: Program<info, System>
+
+  - MigrateTdaMerkleRootUploadAuthority  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:676
+      - tip_distribution_account: Account<info, TipDistributionAccount> [mut]
+      - merkle_root_upload_config: Account<info, MerkleRootUploadConfig>
+
+
+┌
+├─ Instruction Handlers
+  --- Found 10 instruction(s):
+  - initialize  [0xafaf6d1f0d989bed]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:42
+  - initialize_tip_distribution_account  [0x78bf19b66f31b337]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:63
+  - update_config  [0x1d9efcbf0a53db63]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:101
+  - upload_merkle_root  [0x46036e1dc7becdb0]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:123
+  - close_claim_status  [0xa3d6bfa5f5bc11b9]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:166
+  - close_tip_distribution_account  [0x2f88d0be7df34ae3]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:185
+  - claim  [0x3ec6d6c1d59f6cd2]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:213
+  - initialize_merkle_root_upload_config  [0xe857480e5928281b]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:295
+  - update_merkle_root_upload_config  [0x80e39f8bb0807602]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:311
+  - migrate_tda_merkle_root_upload_authority  [0x0de2a39038cad617]  bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:327
+
+
+┌
+├─ Findings
+#1 [HIGH] Missing `has_one` Constraint: signer `authority` in `UpdateConfig` is not linked to any Account field
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:482 (UpdateConfig::authority)
+  confidence: Medium
+
+  The `Signer<'info>` field `authority` in `UpdateConfig` appears to be an authority (based on its name), but no `Account<'info, T>` field in this struct has `has_one = authority` to verify that the stored authority matches the signer. A program that accepts a signer without linking it to the stored authority via `has_one` cannot guarantee that the caller owns the account they are modifying. This enables privilege escalation and account substitution attacks.
+
+  Suggestion:
+  Add `#[account(mut, has_one = authority)]` to the Account field that stores the authority pubkey (likely `config`). Or add `#[account(signer)]` if the field is meant to be a standalone signer without a stored authority.
+
+  Manual verification:
+  - Locate the stored authority field in the mutable account data.
+  - Check whether the handler manually compares it with the signer key.
+  - Try pairing a valid signer with another user's state account.
+
+#2 [HIGH] Missing `has_one` Constraint: signer `merkle_root_upload_authority` in `Claim` is not linked to any Account field
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:543 (Claim::merkle_root_upload_authority)
+  confidence: Medium
+
+  The `Signer<'info>` field `merkle_root_upload_authority` in `Claim` appears to be an authority (based on its name), but no `Account<'info, T>` field in this struct has `has_one = merkle_root_upload_authority` to verify that the stored authority matches the signer. A program that accepts a signer without linking it to the stored authority via `has_one` cannot guarantee that the caller owns the account they are modifying. This enables privilege escalation and account substitution attacks.
+
+  Suggestion:
+  Add `#[account(mut, has_one = merkle_root_upload_authority)]` to the Account field that stores the authority pubkey (likely `tip_distribution_account`). Or add `#[account(signer)]` if the field is meant to be a standalone signer without a stored authority.
+
+  Manual verification:
+  - Locate the stored authority field in the mutable account data.
+  - Check whether the handler manually compares it with the signer key.
+  - Try pairing a valid signer with another user's state account.
+
+#3 [HIGH] Missing `has_one` Constraint: signer `merkle_root_upload_authority` in `UploadMerkleRoot` is not linked to any Account field
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:594 (UploadMerkleRoot::merkle_root_upload_authority)
+  confidence: Medium
+
+  The `Signer<'info>` field `merkle_root_upload_authority` in `UploadMerkleRoot` appears to be an authority (based on its name), but no `Account<'info, T>` field in this struct has `has_one = merkle_root_upload_authority` to verify that the stored authority matches the signer. A program that accepts a signer without linking it to the stored authority via `has_one` cannot guarantee that the caller owns the account they are modifying. This enables privilege escalation and account substitution attacks.
+
+  Suggestion:
+  Add `#[account(mut, has_one = merkle_root_upload_authority)]` to the Account field that stores the authority pubkey (likely `tip_distribution_account`). Or add `#[account(signer)]` if the field is meant to be a standalone signer without a stored authority.
+
+  Manual verification:
+  - Locate the stored authority field in the mutable account data.
+  - Check whether the handler manually compares it with the signer key.
+  - Try pairing a valid signer with another user's state account.
+
+#4 [HIGH] Missing `has_one` Constraint: signer `authority` in `InitializeMerkleRootUploadConfig` is not linked to any Account field
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:629 (InitializeMerkleRootUploadConfig::authority)
+  confidence: Medium
+
+  The `Signer<'info>` field `authority` in `InitializeMerkleRootUploadConfig` appears to be an authority (based on its name), but no `Account<'info, T>` field in this struct has `has_one = authority` to verify that the stored authority matches the signer. A program that accepts a signer without linking it to the stored authority via `has_one` cannot guarantee that the caller owns the account they are modifying. This enables privilege escalation and account substitution attacks.
+
+  Suggestion:
+  Add `#[account(mut, has_one = authority)]` to the Account field that stores the authority pubkey (likely `config`). Or add `#[account(signer)]` if the field is meant to be a standalone signer without a stored authority.
+
+  Manual verification:
+  - Locate the stored authority field in the mutable account data.
+  - Check whether the handler manually compares it with the signer key.
+  - Try pairing a valid signer with another user's state account.
+
+#5 [HIGH] Reinitialization Risk: `InitializeMerkleRootUploadConfig::config` uses `mut` instead of `init`
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:615 (InitializeMerkleRootUploadConfig::config)
+  confidence: Medium
+  affected: InitializeMerkleRootUploadConfig::config
+
+  The field `config` in `InitializeMerkleRootUploadConfig` is marked with `#[account(mut)]` but NOT `#[account(init)]`, even though this accounts struct appears to be used for initialization. Without Anchor's `init` constraint, the program does not check whether the account already exists. An attacker can call the initialization instruction multiple times, overwriting existing account data and resetting state (e.g., changing the admin to their own pubkey). This is the vulnerability class behind the Cashio $50M hack.
+
+  Suggestion:
+  Change `#[account(mut)]` to `#[account(init, payer = authority, space = 8 + ...)]` on the `config` field, or add an explicit `is_initialized` check before any state writes.
+
+  Manual verification:
+  - Confirm whether Anchor `init` or `init_if_needed` is used on the state account.
+  - Check for an explicit initialized/discriminator guard before state writes.
+  - Attempt calling the initializer twice against the same state account.
+
+#6 [LOW] Missing Owner Constraint: `CloseClaimStatus::claim_status_payer` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:421 (CloseClaimStatus::claim_status_payer)
+  confidence: High
+  affected: CloseClaimStatus::claim_status_payer
+
+  The field `claim_status_payer` in `CloseClaimStatus` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#7 [LOW] Missing Owner Constraint: `CloseTipDistributionAccount::expired_funds_account` is AccountInfo without `#[account(owner = ...)]`
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:502 (CloseTipDistributionAccount::expired_funds_account)
+  confidence: High
+  affected: CloseTipDistributionAccount::expired_funds_account
+
+  The field `expired_funds_account` in `CloseTipDistributionAccount` is typed as `AccountInfo` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `AccountInfo`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#8 [LOW] Missing Owner Constraint: `CloseTipDistributionAccount::validator_vote_account` is AccountInfo without `#[account(owner = ...)]`
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:518 (CloseTipDistributionAccount::validator_vote_account)
+  confidence: High
+  affected: CloseTipDistributionAccount::validator_vote_account
+
+  The field `validator_vote_account` in `CloseTipDistributionAccount` is typed as `AccountInfo` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `AccountInfo`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#9 [LOW] Missing Owner Constraint: `Claim::claimant` is AccountInfo without `#[account(owner = ...)]`
+  at bench\programs\jito-programs\mev-programs\programs\tip-distribution\src\lib.rs:563 (Claim::claimant)
+  confidence: High
+  affected: Claim::claimant
+
+  The field `claimant` in `Claim` is typed as `AccountInfo` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `AccountInfo`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#10 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 10 findings: [HIGH] 5 HIGH | [LOW] 4 LOW | [INFO] 1 INFO
+

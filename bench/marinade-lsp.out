@@ -1,0 +1,502 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench\programs\liquid-staking-program\programs\marinade-finance\src
+  --- Scanning 53 source file(s)...
+
+┌
+├─ Accounts Structs
+  --- Found 30 Accounts struct(s) in 53 file(s):
+
+  - ChangeAuthority  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\change_authority.rs:10
+      - state: Account<info, State> [mut]
+      - admin_authority: Signer<info>
+
+  - ConfigLp  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\config_lp.rs:18
+      - state: Account<info, State> [mut]
+      - admin_authority: Signer<info>
+
+  - ConfigMarinade  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\config_marinade.rs:30
+      - state: Account<info, State> [mut]
+      - admin_authority: Signer<info>
+
+  - ConfigValidatorSystem  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\config_validator_system.rs:6
+      - state: Account<info, State> [mut]
+      - manager_authority: Signer<info>
+
+  - EmergencyPause  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\emergency_pause.rs:11
+      - state: Account<info, State> [mut]
+      - pause_authority: Signer<info>
+
+  - Initialize  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\initialize.rs:19
+      - state: Box<Account<info, State>>
+      - reserve_pda: SystemAccount<info>
+      - stake_list: UncheckedAccount<info> [owner=ID, UncheckedAccount]
+      - validator_list: UncheckedAccount<info> [owner=ID, UncheckedAccount]
+      - msol_mint: Box<Account<info, Mint>>
+      - operational_sol_account: SystemAccount<info>
+      - liq_pool: LiqPoolInitialize<info>
+      - treasury_msol_account: Box<Account<info, TokenAccount>>
+      - clock: Sysvar<info, Clock>
+      - rent: Sysvar<info, Rent>
+
+  - LiqPoolInitialize  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\initialize.rs:74
+      - lp_mint: Box<Account<info, Mint>>
+      - sol_leg_pda: SystemAccount<info>
+      - msol_leg: Box<Account<info, TokenAccount>>
+
+  - ReallocStakeList  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\realloc_stake_list.rs:10
+      - state: Account<info, State> [mut]
+      - admin_authority: Signer<info>
+      - stake_list: Account<info, StakeList> [mut]
+      - rent_funds: Signer<info> [mut, owner=system_program::ID]
+      - system_program: Program<info, System>
+
+  - ReallocValidatorList  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\admin\realloc_validator_list.rs:10
+      - state: Account<info, State> [mut]
+      - admin_authority: Signer<info>
+      - validator_list: Account<info, ValidatorList> [mut]
+      - rent_funds: Signer<info> [mut, owner=system_program::ID]
+      - system_program: Program<info, System>
+
+  - CreateCanonicalStake  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\create_canonical_stake.rs:13
+      - state: Box<Account<info, State>> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - validator_list: Account<info, ValidatorList> [mut]
+      - canonical_stake: UncheckedAccount<info> [mut, UncheckedAccount]
+      - source_stake: Box<Account<info, StakeAccount>> [mut]
+      - stake_deposit_authority: UncheckedAccount<info> [UncheckedAccount]
+      - stake_withdraw_authority: UncheckedAccount<info> [UncheckedAccount]
+      - operational_sol_account: UncheckedAccount<info> [mut, UncheckedAccount]
+      - clock: Sysvar<info, Clock>
+      - stake_history: UncheckedAccount<info> [UncheckedAccount]
+      - stake_program: Program<info, Stake>
+      - system_program: Program<info, System>
+
+  - DeactivateStake  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\deactivate_stake.rs:25
+      - state: Box<Account<info, State>> [mut]
+      - reserve_pda: SystemAccount<info>
+      - validator_list: Account<info, ValidatorList> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - stake_account: Box<Account<info, StakeAccount>> [mut]
+      - stake_deposit_authority: UncheckedAccount<info> [UncheckedAccount]
+      - split_stake_account: Account<info, StakeAccount> [init, owner=stake::program::ID]
+      - split_stake_rent_payer: Signer<info> [mut, owner=system_program::ID]
+      - clock: Sysvar<info, Clock>
+      - rent: Sysvar<info, Rent>
+      - epoch_schedule: Sysvar<info, EpochSchedule>
+      - stake_history: UncheckedAccount<info> [UncheckedAccount]
+      - system_program: Program<info, System>
+      - stake_program: Program<info, Stake>
+
+  - FinalizeDelinquentUpgrade  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\finalize_delinquent_upgrade.rs:10
+      - state: Account<info, State> [mut]
+      - validator_list: Account<info, ValidatorList> [mut]
+
+  - MergeStakes  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\merge_stakes.rs:12
+      - state: Box<Account<info, State>> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - validator_list: Account<info, ValidatorList> [mut]
+      - destination_stake: Box<Account<info, StakeAccount>> [mut]
+      - source_stake: Box<Account<info, StakeAccount>> [mut]
+      - stake_deposit_authority: UncheckedAccount<info> [UncheckedAccount]
+      - stake_withdraw_authority: UncheckedAccount<info> [UncheckedAccount]
+      - operational_sol_account: UncheckedAccount<info> [mut, UncheckedAccount]
+      - clock: Sysvar<info, Clock>
+      - stake_history: UncheckedAccount<info> [UncheckedAccount]
+      - stake_program: Program<info, Stake>
+
+  - StakeReserve  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\stake_reserve.rs:30
+      - state: Box<Account<info, State>> [mut]
+      - validator_list: Account<info, ValidatorList> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - validator_vote: UncheckedAccount<info> [mut, UncheckedAccount]
+      - reserve_pda: SystemAccount<info> [mut]
+      - stake_account: Account<info, StakeAccount> [init, owner=stake::program::ID]
+      - stake_deposit_authority: UncheckedAccount<info> [UncheckedAccount]
+      - rent_payer: Signer<info> [mut, owner=system_program::ID]
+      - clock: Sysvar<info, Clock>
+      - epoch_schedule: Sysvar<info, EpochSchedule>
+      - rent: Sysvar<info, Rent>
+      - stake_history: UncheckedAccount<info> [UncheckedAccount]
+      - stake_config: UncheckedAccount<info> [UncheckedAccount]
+      - system_program: Program<info, System>
+      - stake_program: Program<info, Stake>
+
+  - UpdateCommon  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\update.rs:24
+      - state: Box<Account<info, State>> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - stake_account: Box<Account<info, StakeAccount>> [mut]
+      - stake_withdraw_authority: UncheckedAccount<info> [UncheckedAccount]
+      - reserve_pda: SystemAccount<info> [mut]
+      - msol_mint: Box<Account<info, Mint>> [mut]
+      - msol_mint_authority: UncheckedAccount<info> [UncheckedAccount]
+      - treasury_msol_account: UncheckedAccount<info> [mut, UncheckedAccount]
+      - clock: Sysvar<info, Clock>
+      - stake_history: UncheckedAccount<info> [UncheckedAccount]
+      - stake_program: Program<info, Stake>
+      - token_program: Program<info, Token>
+      - validator_list: Account<info, ValidatorList> [mut]
+
+  - UpdateActive  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\update.rs:88
+      - common: UpdateCommon<info>
+
+  - UpdateDeactivated  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\update.rs:107
+      - common: UpdateCommon<info>
+      - operational_sol_account: UncheckedAccount<info> [mut, UncheckedAccount]
+      - system_program: Program<info, System>
+
+  - Claim  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\delayed_unstake\claim.rs:15
+      - state: Account<info, State> [mut]
+      - reserve_pda: SystemAccount<info> [mut]
+      - ticket_account: Account<info, TicketAccountData> [mut]
+      - transfer_sol_to: SystemAccount<info> [mut]
+      - clock: Sysvar<info, Clock>
+      - system_program: Program<info, System>
+
+  - OrderUnstake  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\delayed_unstake\order_unstake.rs:11
+      - state: Box<Account<info, State>> [mut]
+      - msol_mint: Box<Account<info, Mint>> [mut]
+      - burn_msol_from: Box<Account<info, TokenAccount>> [mut]
+      - burn_msol_authority: Signer<info>
+      - new_ticket_account: Box<Account<info, TicketAccountData>>
+      - clock: Sysvar<info, Clock>
+      - rent: Sysvar<info, Rent>
+      - token_program: Program<info, Token>
+
+  - AddLiquidity  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\liq_pool\add_liquidity.rs:12
+      - state: Box<Account<info, State>> [mut]
+      - lp_mint: Box<Account<info, Mint>> [mut]
+      - lp_mint_authority: UncheckedAccount<info> [UncheckedAccount]
+      - liq_pool_msol_leg: Box<Account<info, TokenAccount>>
+      - liq_pool_sol_leg_pda: SystemAccount<info> [mut]
+      - transfer_from: Signer<info> [mut, owner=system_program::ID]
+      - mint_to: Box<Account<info, TokenAccount>> [mut]
+      - system_program: Program<info, System>
+      - token_program: Program<info, Token>
+
+  - LiquidUnstake  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\liq_pool\liquid_unstake.rs:13
+      - state: Box<Account<info, State>> [mut]
+      - msol_mint: Box<Account<info, Mint>> [mut]
+      - liq_pool_sol_leg_pda: SystemAccount<info> [mut]
+      - liq_pool_msol_leg: Box<Account<info, TokenAccount>> [mut]
+      - treasury_msol_account: UncheckedAccount<info> [mut, UncheckedAccount]
+      - get_msol_from: Box<Account<info, TokenAccount>> [mut]
+      - get_msol_from_authority: Signer<info>
+      - transfer_sol_to: SystemAccount<info> [mut]
+      - system_program: Program<info, System>
+      - token_program: Program<info, Token>
+
+  - RemoveLiquidity  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\liq_pool\remove_liquidity.rs:12
+      - state: Box<Account<info, State>> [mut]
+      - lp_mint: Box<Account<info, Mint>> [mut]
+      - burn_from: Box<Account<info, TokenAccount>> [mut]
+      - burn_from_authority: Signer<info>
+      - transfer_sol_to: SystemAccount<info> [mut]
+      - transfer_msol_to: Box<Account<info, TokenAccount>> [mut]
+      - liq_pool_sol_leg_pda: SystemAccount<info> [mut]
+      - liq_pool_msol_leg: Box<Account<info, TokenAccount>> [mut]
+      - liq_pool_msol_leg_authority: UncheckedAccount<info> [UncheckedAccount]
+      - system_program: Program<info, System>
+      - token_program: Program<info, Token>
+
+  - AddValidator  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\management\add_validator.rs:9
+      - state: Account<info, State> [mut]
+      - manager_authority: Signer<info>
+      - validator_list: Account<info, ValidatorList> [mut]
+      - validator_vote: UncheckedAccount<info> [UncheckedAccount]
+      - duplication_flag: UncheckedAccount<info> [init, UncheckedAccount]
+      - rent_payer: Signer<info> [mut, owner=system_program::ID]
+      - clock: Sysvar<info, Clock>
+      - rent: Sysvar<info, Rent>
+      - system_program: Program<info, System>
+
+  - EmergencyUnstake  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\management\emergency_unstake.rs:15
+      - state: Account<info, State> [mut]
+      - validator_manager_authority: Signer<info>
+      - validator_list: Account<info, ValidatorList> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - stake_account: Account<info, StakeAccount> [mut]
+      - stake_deposit_authority: UncheckedAccount<info> [UncheckedAccount]
+      - clock: Sysvar<info, Clock>
+      - stake_program: Program<info, Stake>
+
+  - PartialUnstake  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\management\partial_unstake.rs:21
+      - state: Box<Account<info, State>> [mut]
+      - validator_manager_authority: Signer<info>
+      - validator_list: Account<info, ValidatorList> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - stake_account: Box<Account<info, StakeAccount>> [mut]
+      - stake_deposit_authority: UncheckedAccount<info> [UncheckedAccount]
+      - reserve_pda: SystemAccount<info>
+      - split_stake_account: Account<info, StakeAccount> [init, owner=stake::program::ID]
+      - split_stake_rent_payer: Signer<info> [mut, owner=system_program::ID]
+      - clock: Sysvar<info, Clock>
+      - rent: Sysvar<info, Rent>
+      - stake_history: UncheckedAccount<info> [UncheckedAccount]
+      - system_program: Program<info, System>
+      - stake_program: Program<info, Stake>
+
+  - RemoveValidator  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\management\remove_validator.rs:12
+      - state: Account<info, State> [mut]
+      - manager_authority: Signer<info>
+      - validator_list: Account<info, ValidatorList> [mut]
+      - duplication_flag: UncheckedAccount<info> [mut, owner=ID, UncheckedAccount]
+      - operational_sol_account: UncheckedAccount<info> [mut, UncheckedAccount]
+
+  - SetValidatorScore  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\management\set_validator_score.rs:11
+      - state: Account<info, State> [mut]
+      - manager_authority: Signer<info>
+      - validator_list: Account<info, ValidatorList> [mut]
+
+  - Deposit  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\user\deposit.rs:15
+      - state: Box<Account<info, State>> [mut]
+      - msol_mint: Box<Account<info, Mint>> [mut]
+      - liq_pool_sol_leg_pda: SystemAccount<info> [mut]
+      - liq_pool_msol_leg: Box<Account<info, TokenAccount>> [mut]
+      - liq_pool_msol_leg_authority: UncheckedAccount<info> [UncheckedAccount]
+      - reserve_pda: SystemAccount<info> [mut]
+      - transfer_from: Signer<info> [mut, owner=system_program::ID]
+      - mint_to: Box<Account<info, TokenAccount>> [mut]
+      - msol_mint_authority: UncheckedAccount<info> [UncheckedAccount]
+      - system_program: Program<info, System>
+      - token_program: Program<info, Token>
+
+  - DepositStakeAccount  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\user\deposit_stake_account.rs:16
+      - state: Box<Account<info, State>> [mut]
+      - validator_list: Account<info, ValidatorList> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - stake_account: Box<Account<info, StakeAccount>> [mut]
+      - stake_authority: Signer<info>
+      - duplication_flag: UncheckedAccount<info> [mut, UncheckedAccount]
+      - rent_payer: Signer<info> [mut, owner=system_program::ID]
+      - msol_mint: Account<info, Mint> [mut]
+      - mint_to: Box<Account<info, TokenAccount>> [mut]
+      - msol_mint_authority: UncheckedAccount<info> [UncheckedAccount]
+      - clock: Sysvar<info, Clock>
+      - rent: Sysvar<info, Rent>
+      - system_program: Program<info, System>
+      - token_program: Program<info, Token>
+      - stake_program: Program<info, Stake>
+
+  - WithdrawStakeAccount  bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\user\withdraw_stake_account.rs:28
+      - state: Box<Account<info, State>> [mut]
+      - msol_mint: Box<Account<info, Mint>> [mut]
+      - burn_msol_from: Box<Account<info, TokenAccount>> [mut]
+      - burn_msol_authority: Signer<info> [mut]
+      - treasury_msol_account: UncheckedAccount<info> [mut, UncheckedAccount]
+      - validator_list: Account<info, ValidatorList> [mut]
+      - stake_list: Account<info, StakeList> [mut]
+      - stake_withdraw_authority: UncheckedAccount<info> [UncheckedAccount]
+      - stake_deposit_authority: UncheckedAccount<info> [UncheckedAccount]
+      - stake_account: Box<Account<info, StakeAccount>> [mut]
+      - split_stake_account: Account<info, StakeAccount> [init, owner=stake::program::ID]
+      - split_stake_rent_payer: Signer<info> [mut, owner=system_program::ID]
+      - clock: Sysvar<info, Clock>
+      - system_program: Program<info, System>
+      - token_program: Program<info, Token>
+      - stake_program: Program<info, Stake>
+
+
+┌
+├─ Instruction Handlers
+  --- Found 29 instruction(s):
+  - initialize  [0xafaf6d1f0d989bed]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:61
+  - change_authority  [0x326a426863769158]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:68
+  - add_validator  [0xfa7135368d75d7b9]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:76
+  - remove_validator  [0x1960d39ba10ea8bc]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:81
+  - set_validator_score  [0x6529ce21d86f194e]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:90
+  - config_validator_system  [0x1b5a61d111730728]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:100
+  - deposit  [0xf223c68952e1f2b6]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:109
+  - deposit_stake_account  [0x6e827329a466023b]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:115
+  - liquid_unstake  [0x1e1e77f0bfe30c10]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:123
+  - add_liquidity  [0xb59d59438fb63448]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:128
+  - remove_liquidity  [0x5055d14818ceb16c]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:133
+  - config_lp  [0x0a18a8775630e111]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:138
+  - config_marinade  [0x43032272beb9113e]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:143
+  - order_unstake  [0x61a7906b75be8024]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:159
+  - claim  [0x3ec6d6c1d59f6cd2]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:164
+  - stake_reserve  [0x57d917b3cd197181]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:169
+  - update_active  [0x0443514088f55d98]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:174
+  - update_deactivated  [0x10e883739c64ef32]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:182
+  - deactivate_stake  [0xa59ee561a8dcbbe1]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:191
+  - emergency_unstake  [0x7b45a8c3b7d5c7d6]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:200
+  - partial_unstake  [0x37f1cddd2d72cda3]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:209
+  - merge_stakes  [0xd8248de1f34e7ded]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:220
+  - create_canonical_stake  [0x6d0288e09333b6e8]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:231
+  - pause  [0xd316ddfb4a79c12f]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:241
+  - resume  [0x01a633aa7f208dce]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:247
+  - withdraw_stake_account  [0xd355b841b7b1e9d9]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:253
+  - realloc_validator_list  [0xd73bda855d8a3c7b]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:265
+  - realloc_stake_list  [0x0c247c1b806055c7]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:270
+  - finalize_delinquent_upgrade  [0xad085ac1de34a990]  bench\programs\liquid-staking-program\programs\marinade-finance\src\lib.rs:275
+
+
+┌
+├─ Findings
+#1 [LOW] Missing Owner Constraint: `CreateCanonicalStake::canonical_stake` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\create_canonical_stake.rs:31 (CreateCanonicalStake::canonical_stake)
+  confidence: High
+  affected: CreateCanonicalStake::canonical_stake
+
+  The field `canonical_stake` in `CreateCanonicalStake` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#2 [LOW] Missing Owner Constraint: `CreateCanonicalStake::operational_sol_account` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\create_canonical_stake.rs:54 (CreateCanonicalStake::operational_sol_account)
+  confidence: High
+  affected: CreateCanonicalStake::operational_sol_account
+
+  The field `operational_sol_account` in `CreateCanonicalStake` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#3 [LOW] Missing Owner Constraint: `MergeStakes::operational_sol_account` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\merge_stakes.rs:53 (MergeStakes::operational_sol_account)
+  confidence: High
+  affected: MergeStakes::operational_sol_account
+
+  The field `operational_sol_account` in `MergeStakes` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#4 [LOW] Missing Owner Constraint: `StakeReserve::validator_vote` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\stake_reserve.rs:45 (StakeReserve::validator_vote)
+  confidence: High
+  affected: StakeReserve::validator_vote
+
+  The field `validator_vote` in `StakeReserve` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#5 [LOW] Missing Owner Constraint: `UpdateCommon::treasury_msol_account` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\update.rs:70 (UpdateCommon::treasury_msol_account)
+  confidence: High
+  affected: UpdateCommon::treasury_msol_account
+
+  The field `treasury_msol_account` in `UpdateCommon` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#6 [LOW] Missing Owner Constraint: `UpdateDeactivated::operational_sol_account` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\crank\update.rs:115 (UpdateDeactivated::operational_sol_account)
+  confidence: High
+  affected: UpdateDeactivated::operational_sol_account
+
+  The field `operational_sol_account` in `UpdateDeactivated` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#7 [LOW] Missing Owner Constraint: `LiquidUnstake::treasury_msol_account` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\liq_pool\liquid_unstake.rs:42 (LiquidUnstake::treasury_msol_account)
+  confidence: High
+  affected: LiquidUnstake::treasury_msol_account
+
+  The field `treasury_msol_account` in `LiquidUnstake` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#8 [LOW] Missing Owner Constraint: `RemoveValidator::operational_sol_account` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\management\remove_validator.rs:43 (RemoveValidator::operational_sol_account)
+  confidence: High
+  affected: RemoveValidator::operational_sol_account
+
+  The field `operational_sol_account` in `RemoveValidator` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#9 [LOW] Missing Owner Constraint: `DepositStakeAccount::duplication_flag` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\user\deposit_stake_account.rs:39 (DepositStakeAccount::duplication_flag)
+  confidence: High
+  affected: DepositStakeAccount::duplication_flag
+
+  The field `duplication_flag` in `DepositStakeAccount` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#10 [LOW] Missing Owner Constraint: `WithdrawStakeAccount::treasury_msol_account` is UncheckedAccount without `#[account(owner = ...)]`
+  at bench\programs\liquid-staking-program\programs\marinade-finance\src\instructions\user\withdraw_stake_account.rs:50 (WithdrawStakeAccount::treasury_msol_account)
+  confidence: High
+  affected: WithdrawStakeAccount::treasury_msol_account
+
+  The field `treasury_msol_account` in `WithdrawStakeAccount` is typed as `UncheckedAccount` without an explicit `#[account(owner = ...)]` constraint. Any account owned by any program can be passed here, enabling account substitution attacks where a malicious actor provides an account owned by a program they control. This field carries a `CHECK:` doc comment — the Anchor-ecosystem convention for a deliberately reviewed account. Confirm the documented manual validation actually exists before treating this as exploitable.
+
+  Suggestion:
+  Add `#[account(owner = <PROGRAM_ID>)]` to restrict this account to the expected program owner, or use a typed `Account<'info, T>` wrapper instead of raw `UncheckedAccount`.
+
+  Manual verification:
+  - Confirm the raw account is deserialized or trusted by program logic.
+  - Try substituting an account owned by an attacker-controlled program.
+  - Verify whether a manual owner check exists before reads or writes.
+
+#11 [INFO] No Token-2022 Usage Detected
+  at Workspace root
+  confidence: Medium
+
+  No Token-2022 usage was detected in this workspace. If the program handles Token-2022 tokens, verify that the program ID or dependency is correctly referenced.
+
+  Suggestion:
+  Token-2022 analysis was skipped.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 11 findings: [LOW] 10 LOW | [INFO] 1 INFO
+

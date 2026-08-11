@@ -1,0 +1,48 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench\programs\stake-deposit-interceptor\stake_deposit_interceptor\src
+  --- Scanning 8 source file(s)...
+
+┌
+├─ Accounts Structs
+  WARN No `#[derive(Accounts)]` structs found in the source.
+
+┌
+├─ Findings
+#1 [HIGH] Potential Transfer Fee Bypass: `process_init_stake_pool_deposit_stake_authority` transfers Token-2022 tokens without fee handling
+  at bench\programs\stake-deposit-interceptor\stake_deposit_interceptor\src\processor.rs (process_init_stake_pool_deposit_stake_authority)
+  confidence: Medium
+
+  The instruction `process_init_stake_pool_deposit_stake_authority` appears to transfer Token-2022 tokens but does not contain any transfer fee calculation logic (no references to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, etc.). Token-2022 mints can have transfer fees configured, and the actual amount received by the recipient will be less than the amount transferred. Without fee handling, internal accounting may silently drift from on-chain balances, allowing fund extraction or protocol insolvency.
+
+  Suggestion:
+  1. Use `spl-token-2022::extension::transfer_fee::TransferFeeConfig` to read the fee configuration.
+2. Calculate the fee: `fee = amount * fee_basis_points / 10000`.
+3. Store the post-fee amount or the actual received amount in internal state.
+4. Consider using `TransferChecked` with the expected post-fee amount.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+#2 [HIGH] Potential Transfer Fee Bypass: `transfer_tokens_cpi` transfers Token-2022 tokens without fee handling
+  at bench\programs\stake-deposit-interceptor\stake_deposit_interceptor\src\processor.rs (transfer_tokens_cpi)
+  confidence: Medium
+
+  The instruction `transfer_tokens_cpi` appears to transfer Token-2022 tokens but does not contain any transfer fee calculation logic (no references to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, etc.). Token-2022 mints can have transfer fees configured, and the actual amount received by the recipient will be less than the amount transferred. Without fee handling, internal accounting may silently drift from on-chain balances, allowing fund extraction or protocol insolvency.
+
+  Suggestion:
+  1. Use `spl-token-2022::extension::transfer_fee::TransferFeeConfig` to read the fee configuration.
+2. Calculate the fee: `fee = amount * fee_basis_points / 10000`.
+3. Store the post-fee amount or the actual received amount in internal state.
+4. Consider using `TransferChecked` with the expected post-fee amount.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+Summary: 2 findings: [HIGH] 2 HIGH
+

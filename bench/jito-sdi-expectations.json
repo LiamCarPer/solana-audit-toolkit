@@ -1,0 +1,13 @@
+{
+  "program_name": "stake_deposit_interceptor",
+  "program_id": "5TAiuAh3YGDbwjEruC1ZpXTJWdNDS7Ur7VeqNNiHMmGV",
+  "source": "native",
+  "instructions": [
+    {
+      "name": "process_instruction",
+      "discriminator_hex": null,
+      "handler": "process_instruction",
+      "accounts": []
+    }
+  ]
+}

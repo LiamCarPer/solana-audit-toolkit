@@ -1,0 +1,1071 @@
+{
+  "program_name": "restaking_program",
+  "program_id": null,
+  "source": "native",
+  "instructions": [
+    {
+      "name": "InitializeConfig",
+      "discriminator_hex": null,
+      "handler": "process_initialize_config",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_program",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeNcn",
+      "discriminator_hex": null,
+      "handler": "process_initialize_ncn",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "base",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeOperator",
+      "discriminator_hex": null,
+      "handler": "process_initialize_operator",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "base",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeNcnVaultTicket",
+      "discriminator_hex": null,
+      "handler": "process_initialize_ncn_vault_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeNcnOperatorState",
+      "discriminator_hex": null,
+      "handler": "process_initialize_ncn_operator_state",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_state",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeNcnVaultSlasherTicket",
+      "discriminator_hex": null,
+      "handler": "process_initialize_ncn_vault_slasher_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "slasher",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_ticket",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_slasher_ticket",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_slasher_admin",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 7,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 8,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeOperatorVaultTicket",
+      "discriminator_hex": null,
+      "handler": "process_initialize_operator_vault_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator_vault_ticket_account",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator_vault_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "WarmupNcnVaultTicket",
+      "discriminator_hex": null,
+      "handler": "process_warmup_ncn_vault_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CooldownNcnVaultTicket",
+      "discriminator_hex": null,
+      "handler": "process_cooldown_ncn_vault_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "NcnWarmupOperator",
+      "discriminator_hex": null,
+      "handler": "process_ncn_warmup_operator",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_state",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "NcnCooldownOperator",
+      "discriminator_hex": null,
+      "handler": "process_ncn_cooldown_operator",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_state",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "WarmupNcnVaultSlasherTicket",
+      "discriminator_hex": null,
+      "handler": "process_warmup_ncn_vault_slasher_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "slasher",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_ticket",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_slasher_ticket",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CooldownNcnVaultSlasherTicket",
+      "discriminator_hex": null,
+      "handler": "process_cooldown_ncn_vault_slasher_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "slasher",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_slasher_ticket",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn_slasher_admin",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "WarmupOperatorVaultTicket",
+      "discriminator_hex": null,
+      "handler": "process_warmup_operator_vault_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator_vault_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator_vault_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CooldownOperatorVaultTicket",
+      "discriminator_hex": null,
+      "handler": "process_cooldown_operator_vault_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator_vault_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator_vault_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "OperatorWarmupNcn",
+      "discriminator_hex": null,
+      "handler": "process_operator_warmup_ncn",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_state",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator_ncn_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "OperatorCooldownNcn",
+      "discriminator_hex": null,
+      "handler": "process_operator_cooldown_ncn",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_operator_state",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator_ncn_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "NcnSetAdmin",
+      "discriminator_hex": null,
+      "handler": "process_ncn_set_admin",
+      "accounts": [
+        {
+          "name": "ncn",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "old_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "NcnSetSecondaryAdmin",
+      "discriminator_hex": null,
+      "handler": "process_ncn_set_secondary_admin",
+      "accounts": [
+        {
+          "name": "ncn",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "OperatorSetAdmin",
+      "discriminator_hex": null,
+      "handler": "process_set_node_operator_admin",
+      "accounts": [
+        {
+          "name": "operator",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "old_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "OperatorSetSecondaryAdmin",
+      "discriminator_hex": null,
+      "handler": "process_set_operator_secondary_admin",
+      "accounts": [
+        {
+          "name": "operator",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "OperatorSetFee",
+      "discriminator_hex": null,
+      "handler": "process_operator_set_fee",
+      "accounts": [
+        {
+          "name": "_config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator_account",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "NcnDelegateTokenAccount",
+      "discriminator_hex": null,
+      "handler": "process_ncn_delegate_token_account",
+      "accounts": [
+        {
+          "name": "ncn_info",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "delegate_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_mint",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_account",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "delegate",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_program_info",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "OperatorDelegateTokenAccount",
+      "discriminator_hex": null,
+      "handler": "process_operator_delegate_token_account",
+      "accounts": [
+        {
+          "name": "operator_info",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "delegate_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_mint",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_account",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "delegate",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_program_info",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetConfigAdmin",
+      "discriminator_hex": null,
+      "handler": "process_set_config_admin",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "old_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    }
+  ]
+}

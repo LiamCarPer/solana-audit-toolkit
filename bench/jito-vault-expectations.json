@@ -1,0 +1,1298 @@
+{
+  "program_name": "vault_program",
+  "program_id": null,
+  "source": "native",
+  "instructions": [
+    {
+      "name": "InitializeConfig",
+      "discriminator_hex": null,
+      "handler": "process_initialize_config",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "restaking_program",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "program_fee_wallet",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeVault",
+      "discriminator_hex": null,
+      "handler": "process_initialize_vault",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vrt_mint",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "st_mint",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "admin_st_token_account",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_st_token_account",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "burn_vault",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "burn_vault_vrt_token_account",
+          "index": 7,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 8,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "base",
+          "index": 9,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 10,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_program",
+          "index": 11,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "associated_token_program",
+          "index": 12,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeVaultWithMint",
+      "discriminator_hex": null,
+      "handler": "process_initialize_vault_with_mint",
+      "accounts": []
+    },
+    {
+      "name": "InitializeVaultNcnTicket",
+      "discriminator_hex": null,
+      "handler": "process_initialize_vault_ncn_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_vault_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_ticket",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_admin",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 7,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeVaultOperatorDelegation",
+      "discriminator_hex": null,
+      "handler": "process_initialize_vault_operator_delegation",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator_vault_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_operator_delegation",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_operator_admin",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 7,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeVaultNcnSlasherTicket",
+      "discriminator_hex": null,
+      "handler": "process_initialize_vault_ncn_slasher_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "slasher",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn_slasher_ticket",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_slasher_ticket",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_slasher_admin",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 7,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 8,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeVaultNcnSlasherOperatorTicket",
+      "discriminator_hex": null,
+      "handler": "process_initialize_vault_ncn_slasher_operator_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "slasher",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_slasher_ticket",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_slasher_operator_ticket",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 7,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 8,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetSecondaryAdmin",
+      "discriminator_hex": null,
+      "handler": "process_set_secondary_admin",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetAdmin",
+      "discriminator_hex": null,
+      "handler": "process_set_admin",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "old_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetDepositCapacity",
+      "discriminator_hex": null,
+      "handler": "process_set_deposit_capacity",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_capacity_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "DelegateTokenAccount",
+      "discriminator_hex": null,
+      "handler": "process_delegate_token_account",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "delegate_asset_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_mint",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_account",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "delegate",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_program_info",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetFees",
+      "discriminator_hex": null,
+      "handler": "process_set_fees",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_fee_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetProgramFee",
+      "discriminator_hex": null,
+      "handler": "process_set_program_fee",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "config_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetProgramFeeWallet",
+      "discriminator_hex": null,
+      "handler": "process_set_program_fee_wallet",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "config_fee_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_fee_wallet",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetIsPaused",
+      "discriminator_hex": null,
+      "handler": "process_set_is_paused",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "MintTo",
+      "discriminator_hex": null,
+      "handler": "process_mint",
+      "accounts": []
+    },
+    {
+      "name": "EnqueueWithdrawal",
+      "discriminator_hex": null,
+      "handler": "process_enqueue_withdrawal",
+      "accounts": []
+    },
+    {
+      "name": "ChangeWithdrawalTicketOwner",
+      "discriminator_hex": null,
+      "handler": "process_change_withdrawal_ticket_owner",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_staker_withdrawal_ticket",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "old_owner",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_owner",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "BurnWithdrawalTicket",
+      "discriminator_hex": null,
+      "handler": "process_burn_withdrawal_ticket",
+      "accounts": []
+    },
+    {
+      "name": "WarmupVaultNcnTicket",
+      "discriminator_hex": null,
+      "handler": "process_warmup_vault_ncn_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CooldownVaultNcnTicket",
+      "discriminator_hex": null,
+      "handler": "process_cooldown_vault_ncn_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_ticket",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "WarmupVaultNcnSlasherTicket",
+      "discriminator_hex": null,
+      "handler": "process_warmup_vault_ncn_slasher_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "slasher",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_slasher_ticket",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_slasher_admin",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CooldownVaultNcnSlasherTicket",
+      "discriminator_hex": null,
+      "handler": "process_cooldown_vault_ncn_slasher_ticket",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "ncn",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "slasher",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_ncn_slasher_ticket",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_slasher_admin",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "AddDelegation",
+      "discriminator_hex": null,
+      "handler": "process_add_delegation",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_operator_delegation",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_delegation_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CooldownDelegation",
+      "discriminator_hex": null,
+      "handler": "process_cooldown_delegation",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_operator_delegation",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_delegation_admin",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "UpdateVaultBalance",
+      "discriminator_hex": null,
+      "handler": "process_update_vault_balance",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_token_account",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vrt_mint",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_fee_token_account",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "token_program",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "InitializeVaultUpdateStateTracker",
+      "discriminator_hex": null,
+      "handler": "process_initialize_vault_update_state_tracker",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_update_state_tracker",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CrankVaultUpdateStateTracker",
+      "discriminator_hex": null,
+      "handler": "process_crank_vault_update_state_tracker",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "operator",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_operator_delegation",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_update_state_tracker",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CloseVaultUpdateStateTracker",
+      "discriminator_hex": null,
+      "handler": "process_close_vault_update_state_tracker",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vault_info",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "vault_update_state_tracker_info",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "CreateTokenMetadata",
+      "discriminator_hex": null,
+      "handler": "process_create_token_metadata",
+      "accounts": [
+        {
+          "name": "vault_info",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vrt_mint",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "payer",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "metadata",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "mpl_token_metadata_program",
+          "index": 5,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "system_program",
+          "index": 6,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "UpdateTokenMetadata",
+      "discriminator_hex": null,
+      "handler": "process_update_token_metadata",
+      "accounts": [
+        {
+          "name": "vault_info",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "vrt_mint",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "metadata",
+          "index": 3,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "mpl_token_metadata_program",
+          "index": 4,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    },
+    {
+      "name": "SetConfigAdmin",
+      "discriminator_hex": null,
+      "handler": "process_set_config_admin",
+      "accounts": [
+        {
+          "name": "config",
+          "index": 0,
+          "is_signer_expected": false,
+          "is_writable_expected": true,
+          "pda": null
+        },
+        {
+          "name": "old_admin",
+          "index": 1,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        },
+        {
+          "name": "new_admin",
+          "index": 2,
+          "is_signer_expected": false,
+          "is_writable_expected": false,
+          "pda": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,482 @@
+╔══════════════════════════════════════════════════╗
+║       Solana Audit Toolkit (sat) v0.1.0         ║
+╚══════════════════════════════════════════════════╝
+  --- Source path: bench\programs\jito-restaking\restaking_program\src
+  --- Scanning 26 source file(s)...
+
+┌
+├─ Accounts Structs
+  WARN No `#[derive(Accounts)]` structs found in the source.
+
+┌
+├─ Findings
+#1 [HIGH] Potential Transfer Fee Bypass: `process_ncn_delegate_token_account` transfers Token-2022 tokens without fee handling
+  at bench\programs\jito-restaking\restaking_program\src\ncn_delegate_token_account.rs (process_ncn_delegate_token_account)
+  confidence: Medium
+
+  The instruction `process_ncn_delegate_token_account` appears to transfer Token-2022 tokens but does not contain any transfer fee calculation logic (no references to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, etc.). Token-2022 mints can have transfer fees configured, and the actual amount received by the recipient will be less than the amount transferred. Without fee handling, internal accounting may silently drift from on-chain balances, allowing fund extraction or protocol insolvency.
+
+  Suggestion:
+  1. Use `spl-token-2022::extension::transfer_fee::TransferFeeConfig` to read the fee configuration.
+2. Calculate the fee: `fee = amount * fee_basis_points / 10000`.
+3. Store the post-fee amount or the actual received amount in internal state.
+4. Consider using `TransferChecked` with the expected post-fee amount.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+#2 [HIGH] Potential Transfer Fee Bypass: `process_operator_delegate_token_account` transfers Token-2022 tokens without fee handling
+  at bench\programs\jito-restaking\restaking_program\src\operator_delegate_token_account.rs (process_operator_delegate_token_account)
+  confidence: Medium
+
+  The instruction `process_operator_delegate_token_account` appears to transfer Token-2022 tokens but does not contain any transfer fee calculation logic (no references to `transfer_fee`, `calculate_fee`, `fee_basis_points`, `amount_after_fee`, etc.). Token-2022 mints can have transfer fees configured, and the actual amount received by the recipient will be less than the amount transferred. Without fee handling, internal accounting may silently drift from on-chain balances, allowing fund extraction or protocol insolvency.
+
+  Suggestion:
+  1. Use `spl-token-2022::extension::transfer_fee::TransferFeeConfig` to read the fee configuration.
+2. Calculate the fee: `fee = amount * fee_basis_points / 10000`.
+3. Store the post-fee amount or the actual received amount in internal state.
+4. Consider using `TransferChecked` with the expected post-fee amount.
+
+  Manual verification:
+  - Identify which Token-2022 extensions can be enabled for accepted mints.
+  - Compare internal accounting with actual token balance deltas after transfer.
+  - Test with transfer-fee, permanent-delegate, and interest-bearing mints.
+
+#3 [HIGH] Unverified Signer Account: `new_admin`
+  at bench\programs\jito-restaking\restaking_program\src\ncn_set_secondary_admin.rs:168 (NcnSetSecondaryAdmin)
+  confidence: Low
+
+  The account `new_admin` is used in instruction `NcnSetSecondaryAdmin` without any reachable `is_signer` check. Its name identifies it as an authority, yet its signature is never verified, so the runtime guarantees nothing about who supplied it. Exploit: an attacker calls `NcnSetSecondaryAdmin` passing their own public key for `new_admin` and the victim's data accounts; every privileged transition gated on this account (withdrawals, ownership changes, minting) is then authorized under the attacker's identity.
+
+  Suggestion:
+  Verify the signature before using the account, e.g. `if !new_admin.is_signer { return Err(ProgramError::MissingRequiredSignature); }`, or pin the account to a fixed key / PDA derivation.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#4 [HIGH] Unchecked Authority Key: `new_admin`
+  at bench\programs\jito-restaking\restaking_program\src\ncn_set_secondary_admin.rs:168 (NcnSetSecondaryAdmin)
+  confidence: Low
+
+  The authority-named account `new_admin` is used in instruction `NcnSetSecondaryAdmin` without ever being compared to a stored or derived key (`key_checked = false`) and without a signer check (`is_signer_checked = false`). Access control based on "is this the authority account?" therefore degenerates to "is this any account?". Exploit: pass any public key the program will accept for `new_admin` and inherit the authority role the account's name implies.
+
+  Suggestion:
+  Compare the account key against the expected value before use, e.g. `if new_admin.key != expected_authority { return Err(ProgramError::InvalidAccountData); }`, or derive it with `find_program_address` and compare; alternatively require `new_admin.is_signer`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#5 [HIGH] Unverified Signer Account: `new_admin`
+  at bench\programs\jito-restaking\restaking_program\src\operator_set_secondary_admin.rs:176 (OperatorSetSecondaryAdmin)
+  confidence: Low
+
+  The account `new_admin` is used in instruction `OperatorSetSecondaryAdmin` without any reachable `is_signer` check. Its name identifies it as an authority, yet its signature is never verified, so the runtime guarantees nothing about who supplied it. Exploit: an attacker calls `OperatorSetSecondaryAdmin` passing their own public key for `new_admin` and the victim's data accounts; every privileged transition gated on this account (withdrawals, ownership changes, minting) is then authorized under the attacker's identity.
+
+  Suggestion:
+  Verify the signature before using the account, e.g. `if !new_admin.is_signer { return Err(ProgramError::MissingRequiredSignature); }`, or pin the account to a fixed key / PDA derivation.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#6 [HIGH] Unchecked Authority Key: `new_admin`
+  at bench\programs\jito-restaking\restaking_program\src\operator_set_secondary_admin.rs:176 (OperatorSetSecondaryAdmin)
+  confidence: Low
+
+  The authority-named account `new_admin` is used in instruction `OperatorSetSecondaryAdmin` without ever being compared to a stored or derived key (`key_checked = false`) and without a signer check (`is_signer_checked = false`). Access control based on "is this the authority account?" therefore degenerates to "is this any account?". Exploit: pass any public key the program will accept for `new_admin` and inherit the authority role the account's name implies.
+
+  Suggestion:
+  Compare the account key against the expected value before use, e.g. `if new_admin.key != expected_authority { return Err(ProgramError::InvalidAccountData); }`, or derive it with `find_program_address` and compare; alternatively require `new_admin.is_signer`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#7 [HIGH] Unverified Signer Account: `new_admin`
+  at bench\programs\jito-restaking\restaking_program\src\set_config_admin.rs:192 (SetConfigAdmin)
+  confidence: Low
+
+  The account `new_admin` is used in instruction `SetConfigAdmin` without any reachable `is_signer` check. Its name identifies it as an authority, yet its signature is never verified, so the runtime guarantees nothing about who supplied it. Exploit: an attacker calls `SetConfigAdmin` passing their own public key for `new_admin` and the victim's data accounts; every privileged transition gated on this account (withdrawals, ownership changes, minting) is then authorized under the attacker's identity.
+
+  Suggestion:
+  Verify the signature before using the account, e.g. `if !new_admin.is_signer { return Err(ProgramError::MissingRequiredSignature); }`, or pin the account to a fixed key / PDA derivation.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#8 [HIGH] Unchecked Authority Key: `new_admin`
+  at bench\programs\jito-restaking\restaking_program\src\set_config_admin.rs:192 (SetConfigAdmin)
+  confidence: Low
+
+  The authority-named account `new_admin` is used in instruction `SetConfigAdmin` without ever being compared to a stored or derived key (`key_checked = false`) and without a signer check (`is_signer_checked = false`). Access control based on "is this the authority account?" therefore degenerates to "is this any account?". Exploit: pass any public key the program will accept for `new_admin` and inherit the authority role the account's name implies.
+
+  Suggestion:
+  Compare the account key against the expected value before use, e.g. `if new_admin.key != expected_authority { return Err(ProgramError::InvalidAccountData); }`, or derive it with `find_program_address` and compare; alternatively require `new_admin.is_signer`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#9 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\initialize_ncn_vault_ticket.rs:33 (InitializeNcnVaultTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `InitializeNcnVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#10 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\initialize_ncn_vault_slasher_ticket.rs:33 (InitializeNcnVaultSlasherTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `InitializeNcnVaultSlasherTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#11 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\initialize_operator_vault_ticket.rs:36 (InitializeOperatorVaultTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `InitializeOperatorVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#12 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_ticket.rs:23 (WarmupNcnVaultTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `WarmupNcnVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#13 [MEDIUM] Unchecked Deserialization: `ncn`
+  at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_ticket.rs:30 (WarmupNcnVaultTicket)
+  confidence: Low
+
+  `ncn` is deserialized with `try_from_slice_unchecked` in `WarmupNcnVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if ncn.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#14 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_ticket.rs:34 (CooldownNcnVaultTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `CooldownNcnVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#15 [MEDIUM] Unchecked Deserialization: `ncn`
+  at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_ticket.rs:26 (CooldownNcnVaultTicket)
+  confidence: Low
+
+  `ncn` is deserialized with `try_from_slice_unchecked` in `CooldownNcnVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if ncn.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#16 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\ncn_warmup_operator.rs:33 (NcnWarmupOperator)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `NcnWarmupOperator` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#17 [MEDIUM] Unchecked Deserialization: `ncn`
+  at bench\programs\jito-restaking\restaking_program\src\ncn_warmup_operator.rs:25 (NcnWarmupOperator)
+  confidence: Low
+
+  `ncn` is deserialized with `try_from_slice_unchecked` in `NcnWarmupOperator` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if ncn.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#18 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\ncn_cooldown_operator.rs:39 (NcnCooldownOperator)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `NcnCooldownOperator` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#19 [MEDIUM] Unchecked Deserialization: `ncn`
+  at bench\programs\jito-restaking\restaking_program\src\ncn_cooldown_operator.rs:31 (NcnCooldownOperator)
+  confidence: Low
+
+  `ncn` is deserialized with `try_from_slice_unchecked` in `NcnCooldownOperator` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if ncn.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#20 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_slasher_ticket.rs:26 (WarmupNcnVaultSlasherTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `WarmupNcnVaultSlasherTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#21 [MEDIUM] Unchecked Deserialization: `ncn`
+  at bench\programs\jito-restaking\restaking_program\src\warmup_ncn_vault_slasher_ticket.rs:41 (WarmupNcnVaultSlasherTicket)
+  confidence: Low
+
+  `ncn` is deserialized with `try_from_slice_unchecked` in `WarmupNcnVaultSlasherTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if ncn.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#22 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_slasher_ticket.rs:25 (CooldownNcnVaultSlasherTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `CooldownNcnVaultSlasherTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#23 [MEDIUM] Unchecked Deserialization: `ncn`
+  at bench\programs\jito-restaking\restaking_program\src\cooldown_ncn_vault_slasher_ticket.rs:39 (CooldownNcnVaultSlasherTicket)
+  confidence: Low
+
+  `ncn` is deserialized with `try_from_slice_unchecked` in `CooldownNcnVaultSlasherTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if ncn.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#24 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\warmup_operator_vault_ticket.rs:24 (WarmupOperatorVaultTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `WarmupOperatorVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#25 [MEDIUM] Unchecked Deserialization: `operator`
+  at bench\programs\jito-restaking\restaking_program\src\warmup_operator_vault_ticket.rs:31 (WarmupOperatorVaultTicket)
+  confidence: Low
+
+  `operator` is deserialized with `try_from_slice_unchecked` in `WarmupOperatorVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if operator.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#26 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\cooldown_operator_vault_ticket.rs:25 (CooldownOperatorVaultTicket)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `CooldownOperatorVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#27 [MEDIUM] Unchecked Deserialization: `operator`
+  at bench\programs\jito-restaking\restaking_program\src\cooldown_operator_vault_ticket.rs:32 (CooldownOperatorVaultTicket)
+  confidence: Low
+
+  `operator` is deserialized with `try_from_slice_unchecked` in `CooldownOperatorVaultTicket` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if operator.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#28 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\operator_warmup_ncn.rs:33 (OperatorWarmupNcn)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `OperatorWarmupNcn` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#29 [MEDIUM] Unchecked Deserialization: `operator`
+  at bench\programs\jito-restaking\restaking_program\src\operator_warmup_ncn.rs:25 (OperatorWarmupNcn)
+  confidence: Low
+
+  `operator` is deserialized with `try_from_slice_unchecked` in `OperatorWarmupNcn` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if operator.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#30 [MEDIUM] Unchecked Deserialization: `config`
+  at bench\programs\jito-restaking\restaking_program\src\operator_cooldown_ncn.rs:37 (OperatorCooldownNcn)
+  confidence: Low
+
+  `config` is deserialized with `try_from_slice_unchecked` in `OperatorCooldownNcn` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if config.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#31 [MEDIUM] Unchecked Deserialization: `operator`
+  at bench\programs\jito-restaking\restaking_program\src\operator_cooldown_ncn.rs:29 (OperatorCooldownNcn)
+  confidence: Low
+
+  `operator` is deserialized with `try_from_slice_unchecked` in `OperatorCooldownNcn` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if operator.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#32 [MEDIUM] Unchecked Deserialization: `ncn_info`
+  at bench\programs\jito-restaking\restaking_program\src\ncn_delegate_token_account.rs:48 (NcnDelegateTokenAccount)
+  confidence: Low
+
+  `ncn_info` is deserialized with `try_from_slice_unchecked` in `NcnDelegateTokenAccount` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if ncn_info.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+#33 [MEDIUM] Unchecked Deserialization: `operator_info`
+  at bench\programs\jito-restaking\restaking_program\src\operator_delegate_token_account.rs:49 (OperatorDelegateTokenAccount)
+  confidence: Low
+
+  `operator_info` is deserialized with `try_from_slice_unchecked` in `OperatorDelegateTokenAccount` while the account's owner is never verified (`owner_checked = false`) and its data's discriminator is never validated. Any account owned by any program can be passed here, so `try_from_slice_unchecked` runs over attacker-controlled bytes and every later check operates on fabricated state. Exploit: supply an account owned by a malicious program with a forged layout; the program deserializes it as its own state and writes derived data, which the attacker influenced.
+
+  Suggestion:
+  Verify the owner before deserializing: `if operator_info.owner != program_id { return Err(ProgramError::IllegalOwner); }`, and validate the discriminator: `if data[0..8] != DISCRIMINATOR { return Err(ProgramError::InvalidAccountData); }`.
+
+  Manual verification:
+  - Map the flagged account or instruction to the handler logic.
+  - Check whether equivalent manual validation exists outside Anchor attributes.
+  - Create the smallest transaction or unit test that proves exploitability.
+
+Summary: 33 findings: [HIGH] 8 HIGH | [MED] 25 MEDIUM
+
