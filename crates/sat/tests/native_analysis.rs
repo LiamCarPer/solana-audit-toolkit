@@ -88,6 +88,18 @@ fn test_e2e_state_creation_vuln_fixture() {
 }
 
 #[test]
+fn test_e2e_oracle_vuln_fixture() {
+    let (_program, findings) = analyze_fixture("oracle/vuln.rs");
+    for prefix in ["Stale Oracle Price:", "Oracle Confidence Unvalidated:", "Oracle Decimals/Exponent Mismatch:"] {
+        assert!(
+            findings.iter().any(|f| f.title.starts_with(prefix)),
+            "expected a finding starting with '{prefix}' in oracle/vuln.rs, got: {:?}",
+            findings.iter().map(|f| &f.title).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn test_e2e_clean_fixtures_produce_no_native_findings() {
     for rel in [
         "auth/clean.rs",
@@ -96,6 +108,7 @@ fn test_e2e_clean_fixtures_produce_no_native_findings() {
         "cpi/clean.rs",
         "validate/clean.rs",
         "state_creation/clean.rs",
+        "oracle/clean.rs",
     ] {
         let (_program, findings) = analyze_fixture(rel);
         assert!(
@@ -219,6 +232,9 @@ fn test_sarif_classification_of_native_rules() {
         ("Self-Referential Validation: `x`", "SAT031"),
         ("Permissionless State Creation: `x`", "SAT032"),
         ("Unanchored Token Mint: `x`", "SAT033"),
+        ("Stale Oracle Price: `x`", "SAT034"),
+        ("Oracle Confidence Unvalidated: `x`", "SAT035"),
+        ("Oracle Decimals/Exponent Mismatch: `x`", "SAT036"),
         // SAT026 intentionally reuses the Anchor SAT012 title.
         ("Unsafe Arithmetic: `a + b`", "SAT012"),
     ];
@@ -257,7 +273,7 @@ fn test_sarif_classification_of_native_rules() {
         .collect();
     for id in [
         "SAT019", "SAT020", "SAT021", "SAT022", "SAT023", "SAT024", "SAT025", "SAT027", "SAT028", "SAT029", "SAT030",
-        "SAT031", "SAT032", "SAT033",
+        "SAT031", "SAT032", "SAT033", "SAT034", "SAT035", "SAT036",
     ] {
         assert!(rules.contains(&id), "SARIF rules table missing {id}");
     }

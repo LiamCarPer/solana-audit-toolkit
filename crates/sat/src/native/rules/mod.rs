@@ -1,4 +1,4 @@
-//! Native rule slices (SAT019–SAT032).
+//! Native rule slices (SAT019–SAT036).
 //!
 //! Each submodule exports `pub fn check(program: &NativeProgram, parsed:
 //! &[(syn::File, String)]) -> Vec<Finding>` and owns its fixtures + tests:
@@ -8,10 +8,12 @@
 //! - `cpi`       — SAT028 Token CPI Unverified Authority / SAT029 Self-Invocation / SAT030 Cross-Instruction State Reuse
 //! - `validate`  — SAT031 Self-Referential Validation (Cashio class) + SAT033 Unanchored Token Mint
 //! - `state_creation` — SAT032 Permissionless State Creation (Anchor path; the `new_bank` half of Cashio)
+//! - `oracle`    — SAT034 Stale Oracle Price / SAT035 Oracle Confidence Unvalidated / SAT036 Oracle Decimals/Exponent Mismatch
 
 pub mod auth;
 pub mod cpi;
 pub mod lifecycle;
+pub mod oracle;
 pub mod pda_cei;
 pub mod state_creation;
 pub mod validate;
@@ -26,5 +28,6 @@ pub fn run(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Findi
     findings.extend(lifecycle::check(program, parsed));
     findings.extend(cpi::check(program, parsed));
     findings.extend(validate::check(program, parsed));
+    findings.extend(oracle::check(program, parsed));
     findings
 }

@@ -158,6 +158,21 @@ const RULES: &[(&str, &str, &str)] = &[
         "Unanchored Token Mint",
         "A token transfer/mint CPI whose source token account's mint identity is never compared to canonical state.",
     ),
+    (
+        "SAT034",
+        "Stale Oracle Price",
+        "A price-feed account's time field is never consumed, so nothing bounds the feed's age.",
+    ),
+    (
+        "SAT035",
+        "Oracle Confidence Unvalidated",
+        "A price-feed account's confidence field is never consumed, so price quality is unbounded.",
+    ),
+    (
+        "SAT036",
+        "Oracle Decimals/Exponent Mismatch",
+        "A price-feed account's exponent field is never consumed, so raw feed integers are used without their scale.",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -264,6 +279,12 @@ pub(crate) fn classify_finding_rule(finding: &Finding) -> String {
         "SAT032".to_string()
     } else if finding.title.contains("Unanchored Token Mint") {
         "SAT033".to_string()
+    } else if finding.title.contains("Stale Oracle Price") {
+        "SAT034".to_string()
+    } else if finding.title.contains("Oracle Confidence") {
+        "SAT035".to_string()
+    } else if finding.title.contains("Oracle Decimals") {
+        "SAT036".to_string()
     } else if finding.title.contains("Unverified Signer Account") {
         "SAT019".to_string()
     } else if finding.title.contains("Unverified Owner Account") {

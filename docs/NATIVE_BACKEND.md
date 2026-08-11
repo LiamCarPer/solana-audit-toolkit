@@ -130,7 +130,7 @@ Rules must treat guards in `if` conditions, `require!`, `assert!`, `invariant!`,
 and early-return blocks. When the account is a PDA (`is_pda`), key-equality
 against the derived address counts as a key check.
 
-## 7. Rules (SAT019–SAT031) — exact titles, severities, triggers
+## 7. Rules (SAT019–SAT036) — exact titles, severities, triggers
 
 | ID | Exact title prefix | Sev | Trigger (all in resolved model) | FP filters |
 |---|---|---|---|---|
@@ -147,6 +147,13 @@ against the derived address counts as a key check.
 | SAT029 | `Self-Invocation:` | Medium | CPI where `invoke` program_id equals the declared program_id | — |
 | SAT030 | `Cross-Instruction State Reuse:` | Medium | state account (same type, recovered layout) written by ≥2 instructions where one writes without discriminator/init guard | skip if all writers have init/guard |
 | SAT031 | `Self-Referential Validation:` | High | handler (+ validation helpers, depth ≤ 2, incl. method calls) contains equality comparisons whose connected graph of caller-supplied (account, field) nodes has ≥ 2 nodes and no canonical anchor | skip components with any anchored comparison; skip `a.key == b.key`-only (identity-pinning) components; sysvars/programs/literal-seed PDAs and owner/key-pinned accounts are canonical anchors |
+| SAT032 | `Permissionless State Creation:` | High | Anchor path: instruction with an `#[account(init ...)]`/`init_if_needed` field records an authority-named slot (`admin`, `*_authority`, `owner`, …) that is neither `Signer<'info>`-typed nor `#[account(signer)]`-constrained | `CHECK:` comments do NOT suppress (unlike SAT001/002) — the recorded key is caller-chosen by construction; skip non-creating instructions |
+| SAT033 | `Unanchored Token Mint:` | High | Anchor path: token transfer/mint/burn CPI (anchor-spl `Transfer`/`MintTo`/`Burn` accounts structs) whose SOURCE token account's `.mint` (or the mint account's `.key` for MintTo) appears in NO comparison of the instruction's validation graph | skip when the mint node IS compared (SAT031 owns unanchored-but-compared chains) |
+| SAT034 | `Stale Oracle Price:` | High | native path: a feed-named account (`*feed*`, `*oracle*`, `*_price`) whose data is read (field accesses / deser taint, incl. `try_borrow_data`→`load_price().unwrap()` chains and nested `agg.conf`) but whose time field (`publish_time`/`last_updated`/`timestamp`) is never consumed | skip CPI-passed-only feeds (only identity members touched) |
+| SAT035 | `Oracle Confidence Unvalidated:` | High | same trigger; the feed's `conf`/`confidence` field never consumed | same suppression |
+| SAT036 | `Oracle Decimals/Exponent Mismatch:` | High | same trigger; the feed's `expo`/`decimal` field never consumed | same suppression |
+
+Oracle v1 scope note: "never consumed" is the signal — reading a safety field without *bounding* it (e.g. `conf` read but never compared) is a documented refinement. The Anchor-path oracle extension is a follow-up.
 
 Title wording is **load-bearing**: these exact prefixes avoid substring collisions
 with existing SARIF classifier arms (`"Missing Signer"`, `"Missing Owner"`,

@@ -91,13 +91,13 @@ struct Comparison {
 
 /// Free functions + impl methods (bare and `Type::method` qualified) across
 /// the parsed files. Skip `#[cfg(test)]` items and `mod tests` bodies.
-struct FnIndex<'a> {
+pub struct FnIndex<'a> {
     fns: HashMap<String, Vec<(&'a syn::Block, usize)>>,
     files: &'a [(syn::File, String)],
 }
 
 impl<'a> FnIndex<'a> {
-    fn build(files: &'a [(syn::File, String)]) -> Self {
+    pub fn build(files: &'a [(syn::File, String)]) -> Self {
         let mut fns: HashMap<String, Vec<(&'a syn::Block, usize)>> = HashMap::new();
         for (i, (file, _)) in files.iter().enumerate() {
             collect_fns(&file.items, i, &mut fns);
@@ -107,7 +107,7 @@ impl<'a> FnIndex<'a> {
 
     /// Best candidate for `name`: a definition in `prefer_file` if one
     /// exists, otherwise the first definition overall.
-    fn lookup(&self, name: &str, prefer_file: &str) -> Option<(&'a syn::Block, usize)> {
+    pub fn lookup(&self, name: &str, prefer_file: &str) -> Option<(&'a syn::Block, usize)> {
         let candidates = self.fns.get(name)?;
         candidates.iter().find(|(_, i)| self.files[*i].1 == prefer_file).or_else(|| candidates.first()).copied()
     }
@@ -237,17 +237,17 @@ pub fn leaf_type_ident(ty: &syn::Type) -> String {
 /// Bundle awareness for account resolution: which account names of an
 /// instruction are themselves in-file Accounts bundles (so `bundle.field`
 /// names another account slot).
-struct Bundles {
+pub struct Bundles {
     /// Account name → whether it is an in-file struct bundle.
     is_bundle: HashSet<String>,
 }
 
 impl Bundles {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Bundles { is_bundle: HashSet::new() }
     }
 
-    fn build(accounts: &[ResolvedAccount], account_types: &HashMap<String, String>, structs: &StructIndex) -> Self {
+    pub fn build(accounts: &[ResolvedAccount], account_types: &HashMap<String, String>, structs: &StructIndex) -> Self {
         let is_bundle = accounts
             .iter()
             .filter(|a| account_types.get(&a.name).is_some_and(|t| structs.is_bundle(t)))
@@ -256,7 +256,7 @@ impl Bundles {
         Bundles { is_bundle }
     }
 
-    fn contains(&self, account: &str) -> bool {
+    pub fn contains(&self, account: &str) -> bool {
         self.is_bundle.contains(account)
     }
 }
@@ -815,7 +815,7 @@ fn walk_for_callees_block(block: &syn::Block, index: &FnIndex, out: &mut Vec<Str
 /// (e.g. `validate` on different Accounts structs) are all followed.
 /// `extra_roots` (handler attribute expressions like `#[access_control(
 /// ctx.accounts.validate())]`) are scanned for callees at depth 0.
-fn collect_blocks<'a>(
+pub fn collect_blocks<'a>(
     block: &'a syn::Block,
     index: &'a FnIndex<'a>,
     visited: &mut HashSet<(usize, String)>,
