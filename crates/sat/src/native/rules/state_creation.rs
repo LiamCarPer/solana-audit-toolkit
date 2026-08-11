@@ -17,6 +17,15 @@
 //! documented manual validation cannot help when the recorded authority is a
 //! caller-chosen key and the state is created permissionlessly.
 //!
+//! Two standard Anchor patterns are NOT caller-chosen and therefore do not
+//! fire, even when the slot is authority-named and unsigner-pinned:
+//! - `#[account(seeds = [...], bump = ...)]` slots are program-derived
+//!   addresses: the program fully determines the recorded key (the Marinade
+//!   `stake_deposit_authority` / `stake_withdraw_authority` class).
+//! - the `init` + `payer = <Signer>` + `system_program` wiring (the payer is
+//!   signer-pinned and only pays rent; the created state does not record it
+//!   as an authority).
+//!
 //! Findings are leads: a legitimate open-registration contract (staking
 //! vaults, protocol registries) may intentionally accept caller-chosen
 //! authorities — confirm whether any privileged transition depends on the
@@ -64,6 +73,11 @@ fn is_authority_named(name: &str) -> bool {
 }
 
 /// Parses an `#[account(...)]` attribute's inner metas.
+///
+/// `#[account(mut, ...)]` opens with the `mut` keyword, which syn's `Meta`
+/// parser rejects — the keyword (and its trailing comma) is filtered out so
+/// the remaining metas (`init`, `seeds`, `signer`, ...) are readable
+/// (Marinade writes `#[account(mut, init, ...)]`-style attributes).
 fn account_metas(attrs: &[syn::Attribute]) -> Vec<syn::Meta> {
     let mut out = Vec::new();
     for attr in attrs {
@@ -71,13 +85,35 @@ fn account_metas(attrs: &[syn::Attribute]) -> Vec<syn::Meta> {
             continue;
         }
         let syn::Meta::List(list) = &attr.meta else { continue };
-        if let Ok(metas) =
-            syn::parse::Parser::parse2(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated, list.tokens.clone())
+        let tokens = strip_mut_meta_keyword(list.tokens.clone());
+        if let Ok(metas) = syn::parse::Parser::parse2(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated, tokens)
         {
             out.extend(metas);
         }
     }
     out
+}
+
+/// Removes a leading `mut` keyword (and its separating comma) from an
+/// `#[account(...)]` attribute's token stream so syn's `Meta` parser can
+/// read the rest.
+fn strip_mut_meta_keyword(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let raw: Vec<proc_macro2::TokenTree> = tokens.into_iter().collect();
+    let mut filtered = Vec::new();
+    let mut drop_next_comma = false;
+    for tt in raw {
+        if matches!(&tt, proc_macro2::TokenTree::Ident(i) if i == "mut") {
+            drop_next_comma = true;
+            continue;
+        }
+        if drop_next_comma && matches!(&tt, proc_macro2::TokenTree::Punct(p) if p.as_char() == ',') {
+            drop_next_comma = false;
+            continue;
+        }
+        drop_next_comma = false;
+        filtered.push(tt);
+    }
+    filtered.into_iter().collect()
 }
 
 /// Whether any `#[account(...)]` attribute contains an `init` or
@@ -89,6 +125,16 @@ fn field_creates_state(attrs: &[syn::Attribute]) -> bool {
 /// Whether the field is pinned as a signer by construction.
 fn field_is_signer(attrs: &[syn::Attribute], type_ident: &str) -> bool {
     type_ident == "Signer" || account_metas(attrs).iter().any(|meta| meta.path().is_ident("signer"))
+}
+
+/// Whether the field is a program-derived address by construction
+/// (`#[account(seeds = ..., bump = ...)]`). A PDA slot is NOT a caller-chosen
+/// key: the program fully determines its address, so recording it in freshly
+/// created state cannot forge a "false bank" (the Marinade
+/// `stake_deposit_authority` class — the Cashio `admin` slots carry no
+/// `seeds` and keep firing).
+fn field_is_pda(attrs: &[syn::Attribute]) -> bool {
+    account_metas(attrs).iter().any(|meta| meta.path().is_ident("seeds"))
 }
 
 /// SAT032: flag creation instructions that record unverified authority keys
@@ -112,7 +158,7 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
         }
 
         for (name, type_ident, attrs) in fields {
-            if !is_authority_named(name) || field_is_signer(attrs, type_ident) {
+            if !is_authority_named(name) || field_is_signer(attrs, type_ident) || field_is_pda(attrs) {
                 continue;
             }
             findings.push(Finding {

@@ -237,3 +237,100 @@ pub struct Vault {
     let flagged = by_rule(&findings, SAT032);
     assert_eq!(flagged.len(), 1, "init_if_needed creation with unchecked owner must fire: {findings:#?}");
 }
+
+// ── SAT032 precision: Marinade-shape Anchor fallback (regression) ────────────
+
+/// Marinade-shape fixture: `init` + `payer = <Signer>` patterns whose
+/// authority-named slots are `#[account(seeds = ..., bump = ...)]`
+/// program-derived addresses. None of the slots is caller-chosen, so no
+/// SAT032 finding may fire.
+#[test]
+fn marinade_shape_fixture_produces_no_state_creation_findings() {
+    let (_, findings) = run(&fixture_source("marinade_shape.rs"));
+    let flagged = by_rule(&findings, SAT032);
+    assert!(flagged.is_empty(), "seeds-PDA authority slots are program-derived, not caller-chosen: {findings:#?}");
+}
+
+/// A `#[account(seeds = ...)]`-constrained authority slot on a creation
+/// instruction is a program-derived address, not a caller-chosen key.
+#[test]
+fn pda_seeded_authority_slot_is_not_caller_chosen() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod staking {
+    use super::*;
+
+    pub fn stake_reserve(ctx: Context<StakeReserve>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[account]
+pub struct State {
+    pub deposit_bump_seed: u8,
+}
+
+#[derive(Accounts)]
+pub struct StakeReserve<'info> {
+    #[account(mut)]
+    pub state: Box<Account<'info, State>>,
+    #[account(init, payer = rent_payer, space = 200, owner = stake::program::ID)]
+    pub stake_account: Account<'info, StakeAccount>,
+    /// CHECK: PDA
+    #[account(seeds = [b"deposit", state.key().as_ref()], bump = state.deposit_bump_seed)]
+    pub stake_deposit_authority: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub rent_payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    pub stake_program: Program<'info, Stake>,
+}
+"#;
+    let (_, findings) = run(source);
+    let flagged = by_rule(&findings, SAT032);
+    assert!(flagged.is_empty(), "seeds-PDA authority is program-derived and must not fire: {findings:#?}");
+}
+
+/// The Cashio-shape discrimination survives: in one instruction, a
+/// seeds-PDA slot is silent while a plain `UncheckedAccount` authority slot
+/// still fires — the `new_bank` recall.
+#[test]
+fn cashio_plain_authority_still_fires_alongside_pda_slot() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod bankman {
+    use super::*;
+
+    pub fn new_bank(ctx: Context<NewBank>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[account]
+pub struct Bank {
+    pub curator: Pubkey,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct NewBank<'info> {
+    #[account(init, payer = payer, seeds = [b"Bank"], bump, space = 64)]
+    pub bank: Account<'info, Bank>,
+    /// CHECK: PDA derived by the program — not caller-chosen.
+    #[account(seeds = [b"authority"], bump)]
+    pub fixed_authority: UncheckedAccount<'info>,
+    /// CHECK: Arbitrary — the Cashio `admin` slot.
+    pub admin: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+"#;
+    let (_, findings) = run(source);
+    let flagged = by_rule(&findings, SAT032);
+    assert_eq!(flagged.len(), 1, "only the plain caller-chosen authority fires: {findings:#?}");
+    assert!(flagged[0].title.contains("`admin`"), "{}", flagged[0].title);
+}

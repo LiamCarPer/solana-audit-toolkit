@@ -28,6 +28,21 @@
 //!   `impl Validate` methods. This is what makes the Cashio tree itself
 //!   analyzable.
 //!
+//! The Anchor fallback keeps two precision gates so it does not drown
+//! well-audited Anchor programs (the Marinade class) in noise:
+//! - **Bundle expansion is `#[derive(Accounts)]`-aware**: plain `#[account]`
+//!   data structs (`State`, `LiqPool`, …) are state columns, not account
+//!   slots, and are never expanded — otherwise every instruction inherits the
+//!   data struct's fields (`lp_mint`, `msol_mint`, …) as phantom accounts.
+//! - **Method calls resolve to the receiving struct's impl**:
+//!   `ctx.accounts.<m>()` / `self.<slot>.<m>()` follow only the impl on that
+//!   Accounts struct, never every impl sharing the method name (`process`,
+//!   `validate`, …) across the workspace.
+//! - **SAT033 skips lamport `Transfer`s and constraint-pinned mints**:
+//!   system-program transfers (no `authority` field) have no mint to anchor,
+//!   and fields pinned by `#[account(token::mint/address/seeds/has_one)]` are
+//!   verified by the Anchor runtime before the handler runs.
+//!
 //! Findings are heuristic leads, not proof: a chain of unanchored comparisons
 //! is *shaped like* the Cashio bug, but whether one of the compared fields is
 //! the load-bearing identity check requires manual confirmation.
@@ -169,25 +184,46 @@ pub type StructField = (String, String, Vec<syn::Attribute>);
 /// Anchor path to expand Accounts bundles, resolve
 /// `self.common.crate_mint`-style chains, and scan
 /// `#[account(constraint = ...)]` attributes on field definitions.
+///
+/// A struct is only treated as an *account bundle* (and therefore expanded /
+/// dereferenced as `bundle.field` chains) when it carries
+/// `#[derive(Accounts)]`. Plain `#[account]` data structs (`State`, `LiqPool`,
+/// …) must NOT be expanded: their fields are serialized state columns, not
+/// account slots — expanding them injects phantom accounts (`lp_mint`,
+/// `msol_mint`, …) into every instruction (the Marinade SAT033 FP class).
 pub struct StructIndex {
     pub fields: HashMap<String, Vec<StructField>>,
+    /// Structs declared with `#[derive(Accounts)]`.
+    accounts_bundles: HashSet<String>,
 }
 
 impl StructIndex {
     pub fn build(files: &[(syn::File, String)]) -> Self {
         let mut fields = HashMap::new();
+        let mut accounts_bundles = HashSet::new();
         for (file, _) in files {
-            collect_structs(&file.items, &mut fields);
+            collect_structs(&file.items, &mut fields, &mut accounts_bundles);
         }
-        StructIndex { fields }
+        StructIndex { fields, accounts_bundles }
     }
 
     pub fn is_bundle(&self, type_ident: &str) -> bool {
-        self.fields.contains_key(type_ident)
+        self.accounts_bundles.contains(type_ident)
     }
 }
 
-fn collect_structs(items: &[syn::Item], out: &mut HashMap<String, Vec<StructField>>) {
+fn struct_is_accounts_bundle(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("derive")
+            && matches!(&a.meta, syn::Meta::List(l) if l.tokens.to_string().contains("Accounts"))
+    })
+}
+
+fn collect_structs(
+    items: &[syn::Item],
+    out: &mut HashMap<String, Vec<StructField>>,
+    accounts_bundles: &mut HashSet<String>,
+) {
     for item in items {
         match item {
             syn::Item::Struct(s) => {
@@ -198,13 +234,16 @@ fn collect_structs(items: &[syn::Item], out: &mut HashMap<String, Vec<StructFiel
                     }
                 }
                 out.entry(s.ident.to_string()).or_insert(field_list);
+                if struct_is_accounts_bundle(&s.attrs) {
+                    accounts_bundles.insert(s.ident.to_string());
+                }
             }
             syn::Item::Mod(m) => {
                 if m.ident == "tests" || is_test_item(&m.attrs) {
                     continue;
                 }
                 if let Some((_, items)) = &m.content {
-                    collect_structs(items, out);
+                    collect_structs(items, out, accounts_bundles);
                 }
             }
             _ => {}
@@ -658,22 +697,80 @@ fn is_known_builtin(name: &str) -> bool {
     )
 }
 
+/// Receiver-aware method-call scoping for the Anchor fallback.
+///
+/// `ctx.accounts.<m>()` resolves to the instruction's root Accounts struct and
+/// `ctx.accounts.<slot>.<m>()` / `self.<slot>.<m>()` to the slot's bundle type
+/// (from the expanded account list), so a method call only joins the graph via
+/// the impl on the *receiving* struct. This kills the Marinade FP class where
+/// every handler's `ctx.accounts.process(...)` pulled **all** `process` impls
+/// of every Accounts struct into every instruction's graph (and with them the
+/// token CPIs that drove 72 spurious SAT033 findings).
+///
+/// Receivers that cannot be resolved (bare `self`, `self.data.leaf.field`
+/// chains into non-account structs) are skipped rather than falling back to
+/// the bare name; plain local-variable receivers keep the legacy bare-name
+/// behavior so Vipers-style `validate_obj.validate()?` still resolves.
+pub struct MethodScope {
+    pub root: String,
+    pub account_types: HashMap<String, String>,
+}
+
+impl MethodScope {
+    /// The struct type a method-call receiver names, when it is a resolvable
+    /// `ctx.accounts[...]` / `self.<slot>` chain.
+    fn receiver_type(&self, receiver: &Expr) -> Option<String> {
+        match peel(receiver) {
+            Expr::Field(f) => {
+                let (base, mut fields) = field_chain_base(f);
+                fields.push(member_name(&f.member));
+                if base == "ctx" && fields.first().map(String::as_str) == Some("accounts") {
+                    return match fields.len() {
+                        1 => Some(self.root.clone()),
+                        _ => self.account_types.get(&fields[1]).cloned(),
+                    };
+                }
+                if base == "self" {
+                    return fields.first().and_then(|slot| self.account_types.get(slot).cloned());
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the receiver is a `self`/`ctx`-rooted chain that the scope is
+    /// expected to resolve; when unresolvable it is deliberately NOT followed
+    /// (avoids the all-impls-of-a-name leak).
+    fn is_scoped_chain(receiver: &Expr) -> bool {
+        match peel(receiver) {
+            Expr::Field(f) => {
+                let (base, _) = field_chain_base(f);
+                base == "self" || base == "ctx"
+            }
+            Expr::Path(p) => p.path.get_ident().is_some_and(|i| i == "self"),
+            _ => false,
+        }
+    }
+}
+
 /// Distinct callees of a block: plain calls (`validate(...)`) and method
 /// calls (`self.accounts.validate()?`), restricted to names that resolve in
 /// the file index. Impl methods are indexed bare by `collect_fns`, so a
-/// `self.x.validate()` call is found.
-fn collect_callees_in_block(block: &syn::Block, index: &FnIndex, out: &mut Vec<String>) {
+/// `self.x.validate()` call is found; with an Anchor [`MethodScope`], method
+/// calls resolve to the receiver struct's impl only.
+fn collect_callees_in_block(block: &syn::Block, index: &FnIndex, out: &mut Vec<String>, scope: Option<&MethodScope>) {
     for stmt in &block.stmts {
         match stmt {
-            syn::Stmt::Expr(e, _) => walk_for_callees(e, index, out),
+            syn::Stmt::Expr(e, _) => walk_for_callees(e, index, out, scope),
             syn::Stmt::Local(l) => {
                 if let Some(init) = &l.init {
-                    walk_for_callees(&init.expr, index, out);
+                    walk_for_callees(&init.expr, index, out, scope);
                 }
             }
             syn::Stmt::Macro(m) => {
                 for arg in macro_exprs(&m.mac) {
-                    walk_for_callees(&arg, index, out);
+                    walk_for_callees(&arg, index, out, scope);
                 }
             }
             syn::Stmt::Item(_) => {}
@@ -681,126 +778,151 @@ fn collect_callees_in_block(block: &syn::Block, index: &FnIndex, out: &mut Vec<S
     }
 }
 
-fn walk_for_callees(e: &Expr, index: &FnIndex, out: &mut Vec<String>) {
+fn walk_for_callees(e: &Expr, index: &FnIndex, out: &mut Vec<String>, scope: Option<&MethodScope>) {
     match e {
         Expr::Call(c) => {
             if let Expr::Path(p) = &*c.func {
-                let name = p.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
-                if !is_known_builtin(&name)
-                    && !matches!(name.as_str(), "msg" | "Ok" | "Err")
-                    && index.fns.contains_key(&name)
-                {
-                    out.push(name);
+                let segs: Vec<String> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
+                let name = segs.last().cloned().unwrap_or_default();
+                if !is_known_builtin(&name) && !matches!(name.as_str(), "msg" | "Ok" | "Err") {
+                    if segs.len() >= 2 {
+                        // Path-qualified impl call (`State::new(...)`,
+                        // `LiqPoolInitialize::process(...)`): resolve the
+                        // specific impl, not every `new`/`process` in the
+                        // workspace.
+                        let qualified = format!("{}::{}", segs[segs.len() - 2], name);
+                        if index.fns.contains_key(&qualified) {
+                            out.push(qualified);
+                        } else if index.fns.contains_key(&name) {
+                            out.push(name);
+                        }
+                    } else if index.fns.contains_key(&name) {
+                        out.push(name);
+                    }
                 }
             }
             for arg in &c.args {
-                walk_for_callees(arg, index, out);
+                walk_for_callees(arg, index, out, scope);
             }
         }
         Expr::MethodCall(m) => {
             let name = m.method.to_string();
-            if index.fns.contains_key(&name) {
-                out.push(name);
+            match scope {
+                Some(scope) => {
+                    if let Some(ty) = scope.receiver_type(&m.receiver) {
+                        let qualified = format!("{ty}::{name}");
+                        if index.fns.contains_key(&qualified) {
+                            out.push(qualified);
+                        }
+                    } else if !MethodScope::is_scoped_chain(&m.receiver) && index.fns.contains_key(&name) {
+                        out.push(name);
+                    }
+                }
+                None => {
+                    if index.fns.contains_key(&name) {
+                        out.push(name);
+                    }
+                }
             }
-            walk_for_callees(&m.receiver, index, out);
+            walk_for_callees(&m.receiver, index, out, scope);
             for arg in &m.args {
-                walk_for_callees(arg, index, out);
+                walk_for_callees(arg, index, out, scope);
             }
         }
-        Expr::Block(b) => walk_for_callees_block(&b.block, index, out),
-        Expr::Unsafe(u) => walk_for_callees_block(&u.block, index, out),
-        Expr::Async(a) => walk_for_callees_block(&a.block, index, out),
-        Expr::Const(c) => walk_for_callees_block(&c.block, index, out),
-        Expr::TryBlock(tb) => walk_for_callees_block(&tb.block, index, out),
+        Expr::Block(b) => walk_for_callees_block(&b.block, index, out, scope),
+        Expr::Unsafe(u) => walk_for_callees_block(&u.block, index, out, scope),
+        Expr::Async(a) => walk_for_callees_block(&a.block, index, out, scope),
+        Expr::Const(c) => walk_for_callees_block(&c.block, index, out, scope),
+        Expr::TryBlock(tb) => walk_for_callees_block(&tb.block, index, out, scope),
         Expr::If(i) => {
-            walk_for_callees(&i.cond, index, out);
-            walk_for_callees_block(&i.then_branch, index, out);
+            walk_for_callees(&i.cond, index, out, scope);
+            walk_for_callees_block(&i.then_branch, index, out, scope);
             if let Some((_, else_expr)) = &i.else_branch {
-                walk_for_callees(else_expr, index, out);
+                walk_for_callees(else_expr, index, out, scope);
             }
         }
         Expr::While(w) => {
-            walk_for_callees(&w.cond, index, out);
-            walk_for_callees_block(&w.body, index, out);
+            walk_for_callees(&w.cond, index, out, scope);
+            walk_for_callees_block(&w.body, index, out, scope);
         }
-        Expr::Loop(l) => walk_for_callees_block(&l.body, index, out),
-        Expr::ForLoop(fl) => walk_for_callees_block(&fl.body, index, out),
+        Expr::Loop(l) => walk_for_callees_block(&l.body, index, out, scope),
+        Expr::ForLoop(fl) => walk_for_callees_block(&fl.body, index, out, scope),
         Expr::Match(m) => {
-            walk_for_callees(&m.expr, index, out);
+            walk_for_callees(&m.expr, index, out, scope);
             for arm in &m.arms {
                 if let Some((_, guard)) = &arm.guard {
-                    walk_for_callees(guard, index, out);
+                    walk_for_callees(guard, index, out, scope);
                 }
-                walk_for_callees(&arm.body, index, out);
+                walk_for_callees(&arm.body, index, out, scope);
             }
         }
-        Expr::Try(t) => walk_for_callees(&t.expr, index, out),
-        Expr::Paren(p) => walk_for_callees(&p.expr, index, out),
-        Expr::Group(g) => walk_for_callees(&g.expr, index, out),
-        Expr::Reference(r) => walk_for_callees(&r.expr, index, out),
-        Expr::RawAddr(r) => walk_for_callees(&r.expr, index, out),
-        Expr::Unary(u) => walk_for_callees(&u.expr, index, out),
-        Expr::Await(a) => walk_for_callees(&a.base, index, out),
-        Expr::Closure(c) => walk_for_callees(&c.body, index, out),
+        Expr::Try(t) => walk_for_callees(&t.expr, index, out, scope),
+        Expr::Paren(p) => walk_for_callees(&p.expr, index, out, scope),
+        Expr::Group(g) => walk_for_callees(&g.expr, index, out, scope),
+        Expr::Reference(r) => walk_for_callees(&r.expr, index, out, scope),
+        Expr::RawAddr(r) => walk_for_callees(&r.expr, index, out, scope),
+        Expr::Unary(u) => walk_for_callees(&u.expr, index, out, scope),
+        Expr::Await(a) => walk_for_callees(&a.base, index, out, scope),
+        Expr::Closure(c) => walk_for_callees(&c.body, index, out, scope),
         Expr::Binary(b) => {
-            walk_for_callees(&b.left, index, out);
-            walk_for_callees(&b.right, index, out);
+            walk_for_callees(&b.left, index, out, scope);
+            walk_for_callees(&b.right, index, out, scope);
         }
         Expr::Assign(a) => {
-            walk_for_callees(&a.left, index, out);
-            walk_for_callees(&a.right, index, out);
+            walk_for_callees(&a.left, index, out, scope);
+            walk_for_callees(&a.right, index, out, scope);
         }
         Expr::Index(i) => {
-            walk_for_callees(&i.expr, index, out);
-            walk_for_callees(&i.index, index, out);
+            walk_for_callees(&i.expr, index, out, scope);
+            walk_for_callees(&i.index, index, out, scope);
         }
         Expr::Tuple(t) => {
             for el in &t.elems {
-                walk_for_callees(el, index, out);
+                walk_for_callees(el, index, out, scope);
             }
         }
         Expr::Array(a) => {
             for el in &a.elems {
-                walk_for_callees(el, index, out);
+                walk_for_callees(el, index, out, scope);
             }
         }
         Expr::Struct(s) => {
             for f in &s.fields {
-                walk_for_callees(&f.expr, index, out);
+                walk_for_callees(&f.expr, index, out, scope);
             }
         }
-        Expr::Cast(c) => walk_for_callees(&c.expr, index, out),
+        Expr::Cast(c) => walk_for_callees(&c.expr, index, out, scope),
         Expr::Return(r) => {
             if let Some(x) = &r.expr {
-                walk_for_callees(x, index, out);
+                walk_for_callees(x, index, out, scope);
             }
         }
         Expr::Break(br) => {
             if let Some(x) = &br.expr {
-                walk_for_callees(x, index, out);
+                walk_for_callees(x, index, out, scope);
             }
         }
         Expr::Macro(m) => {
             for arg in macro_exprs(&m.mac) {
-                walk_for_callees(&arg, index, out);
+                walk_for_callees(&arg, index, out, scope);
             }
         }
         _ => {}
     }
 }
 
-fn walk_for_callees_block(block: &syn::Block, index: &FnIndex, out: &mut Vec<String>) {
+fn walk_for_callees_block(block: &syn::Block, index: &FnIndex, out: &mut Vec<String>, scope: Option<&MethodScope>) {
     for stmt in &block.stmts {
         match stmt {
-            syn::Stmt::Expr(e, _) => walk_for_callees(e, index, out),
+            syn::Stmt::Expr(e, _) => walk_for_callees(e, index, out, scope),
             syn::Stmt::Local(l) => {
                 if let Some(init) = &l.init {
-                    walk_for_callees(&init.expr, index, out);
+                    walk_for_callees(&init.expr, index, out, scope);
                 }
             }
             syn::Stmt::Macro(m) => {
                 for arg in macro_exprs(&m.mac) {
-                    walk_for_callees(&arg, index, out);
+                    walk_for_callees(&arg, index, out, scope);
                 }
             }
             syn::Stmt::Item(_) => {}
@@ -815,6 +937,13 @@ fn walk_for_callees_block(block: &syn::Block, index: &FnIndex, out: &mut Vec<Str
 /// (e.g. `validate` on different Accounts structs) are all followed.
 /// `extra_roots` (handler attribute expressions like `#[access_control(
 /// ctx.accounts.validate())]`) are scanned for callees at depth 0.
+///
+/// Legacy entry (no [`MethodScope`]): method calls follow by bare name — used
+/// by the native-model slices (e.g. the oracle rules), where the receiver
+/// struct type is not resolvable. The Anchor fallback uses
+/// [`collect_blocks_scoped`] so method calls resolve to the receiving
+/// struct's impl only.
+#[allow(dead_code)]
 pub fn collect_blocks<'a>(
     block: &'a syn::Block,
     index: &'a FnIndex<'a>,
@@ -823,15 +952,28 @@ pub fn collect_blocks<'a>(
     out: &mut Vec<&'a syn::Block>,
     extra_roots: &[Expr],
 ) {
+    collect_blocks_scoped(block, index, visited, depth, out, extra_roots, None);
+}
+
+/// [`collect_blocks`] with an Anchor [`MethodScope`] (see its docs).
+pub fn collect_blocks_scoped<'a>(
+    block: &'a syn::Block,
+    index: &'a FnIndex<'a>,
+    visited: &mut HashSet<(usize, String)>,
+    depth: usize,
+    out: &mut Vec<&'a syn::Block>,
+    extra_roots: &[Expr],
+    scope: Option<&MethodScope>,
+) {
     out.push(block);
     if depth >= 2 {
         return;
     }
     let mut callees = Vec::new();
-    collect_callees_in_block(block, index, &mut callees);
+    collect_callees_in_block(block, index, &mut callees, scope);
     if depth == 0 {
         for root in extra_roots {
-            walk_for_callees(root, index, &mut callees);
+            walk_for_callees(root, index, &mut callees, scope);
         }
     }
     callees.sort();
@@ -842,7 +984,7 @@ pub fn collect_blocks<'a>(
             if !visited.insert((*candidate_file, name.clone())) {
                 continue;
             }
-            collect_blocks(candidate, index, visited, depth + 1, out, &[]);
+            collect_blocks_scoped(candidate, index, visited, depth + 1, out, &[], scope);
         }
     }
 }
@@ -861,6 +1003,66 @@ fn seed_canonical(ix: &NativeInstruction) -> HashSet<usize> {
         }
     }
     out
+}
+
+/// Anchor-fallback extension of [`seed_canonical`]: an account slot whose
+/// `#[account(seeds = [...])]` derivation depends on NO instruction account
+/// (constant / literal seed material only) is a program-derived address whose
+/// identity the Anchor runtime pins before the handler runs — the
+/// `MerkleRootUploadConfig::SEED`-class PDA (tip-distribution). Seeds that
+/// reference any caller-supplied account (`&state.key().to_bytes()`,
+/// `crate_token.key().to_bytes()`) are NOT canonical: the Cashio `bank` PDA
+/// is seeded with a caller-chosen `crate_token`, so its address is
+/// attacker-influenced and must keep firing.
+fn const_seed_pdas(ix: &NativeInstruction, account_attrs: &HashMap<String, Vec<syn::Attribute>>) -> HashSet<usize> {
+    let mut out = HashSet::new();
+    for (i, acc) in ix.accounts.iter().enumerate() {
+        let Some(attrs) = account_attrs.get(&acc.name) else { continue };
+        let Some(seeds) = seed_array_exprs(attrs) else { continue };
+        if seeds.iter().all(|e| !expr_references_account(e, ix)) {
+            out.insert(i);
+        }
+    }
+    out
+}
+
+/// The seed element expressions of an `#[account(seeds = [...], ...)]`
+/// attribute, when present.
+fn seed_array_exprs(attrs: &[syn::Attribute]) -> Option<Vec<Expr>> {
+    for meta in account_metas(attrs) {
+        let syn::Meta::NameValue(nv) = meta else { continue };
+        if !nv.path.is_ident("seeds") {
+            continue;
+        }
+        if let Expr::Array(arr) = &nv.value {
+            return Some(arr.elems.iter().cloned().collect());
+        }
+    }
+    None
+}
+
+/// Whether an expression references any account variable of the instruction
+/// (directly or through a method chain like `state.key().to_bytes()`).
+fn expr_references_account(e: &Expr, ix: &NativeInstruction) -> bool {
+    match e {
+        Expr::Path(p) => p.path.segments.iter().any(|seg| account_index(ix, &seg.ident.to_string()).is_some()),
+        Expr::MethodCall(m) => {
+            expr_references_account(&m.receiver, ix) || m.args.iter().any(|a| expr_references_account(a, ix))
+        }
+        Expr::Field(f) => expr_references_account(&f.base, ix),
+        Expr::Call(c) => expr_references_account(&c.func, ix) || c.args.iter().any(|a| expr_references_account(a, ix)),
+        Expr::Reference(r) => expr_references_account(&r.expr, ix),
+        Expr::Paren(p) => expr_references_account(&p.expr, ix),
+        Expr::Group(g) => expr_references_account(&g.expr, ix),
+        Expr::Unary(u) => expr_references_account(&u.expr, ix),
+        Expr::Index(i) => expr_references_account(&i.expr, ix) || expr_references_account(&i.index, ix),
+        Expr::Tuple(t) => t.elems.iter().any(|el| expr_references_account(el, ix)),
+        Expr::Array(a) => a.elems.iter().any(|el| expr_references_account(el, ix)),
+        Expr::Binary(b) => expr_references_account(&b.left, ix) || expr_references_account(&b.right, ix),
+        Expr::Cast(c) => expr_references_account(&c.expr, ix),
+        Expr::Lit(_) => false,
+        _ => false,
+    }
 }
 
 /// A seed expression is literal when it is a quoted string / byte string /
@@ -1169,15 +1371,22 @@ fn context_root_struct(sig: &syn::Signature) -> Option<String> {
     None
 }
 
+/// Expanded account slots of an Accounts struct: `(name, type_ident)` pairs
+/// in declaration order, the name → type map, and the name → field
+/// `#[account(...)]` attribute list (used to recognize framework-pinned
+/// mints and constant-seed PDAs).
+type ExpandedAccounts = (Vec<(String, String)>, HashMap<String, String>, HashMap<String, Vec<syn::Attribute>>);
+
 /// Expand the account slots of an Accounts struct (recursively through
-/// in-file bundle types). Returns `(account_name, type_ident)` pairs in
-/// declaration order, root fields first, deduplicated by name.
-fn expand_accounts(root: &str, structs: &StructIndex) -> (Vec<(String, String)>, HashMap<String, String>) {
-    let mut slots = Vec::new();
+/// in-file Accounts bundles). Returns the [`ExpandedAccounts`] triple.
+fn expand_accounts(root: &str, structs: &StructIndex) -> ExpandedAccounts {
+    let mut expanded = Vec::new();
     let mut seen = HashSet::new();
-    expand_into(root, structs, 0, &mut seen, &mut slots);
+    expand_into(root, structs, 0, &mut seen, &mut expanded);
+    let slots: Vec<(String, String)> = expanded.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect();
     let account_types = slots.iter().map(|(n, t)| (n.clone(), t.clone())).collect();
-    (slots, account_types)
+    let account_attrs = expanded.iter().map(|(n, _, a)| (n.clone(), a.clone())).collect();
+    (slots, account_types, account_attrs)
 }
 
 fn expand_into(
@@ -1185,15 +1394,15 @@ fn expand_into(
     structs: &StructIndex,
     depth: usize,
     seen: &mut HashSet<String>,
-    out: &mut Vec<(String, String)>,
+    out: &mut Vec<(String, String, Vec<syn::Attribute>)>,
 ) {
     if depth > 3 {
         return;
     }
     let Some(fields) = structs.fields.get(struct_name) else { return };
-    for (fname, fty, _attrs) in fields {
+    for (fname, fty, attrs) in fields {
         if seen.insert(fname.clone()) {
-            out.push((fname.clone(), fty.clone()));
+            out.push((fname.clone(), fty.clone(), attrs.clone()));
         }
         if structs.is_bundle(fty) && !fty.is_empty() {
             expand_into(fty, structs, depth + 1, seen, out);
@@ -1281,13 +1490,15 @@ fn analyze_instruction_graph<'a>(
     index: &'a FnIndex<'a>,
     bundles: &Bundles,
     attr_roots: &[Expr],
+    method_scope: Option<&MethodScope>,
+    extra_canonical: &HashSet<usize>,
 ) -> Option<InstructionGraph<'a>> {
     let (handler, file_idx) = index.lookup(&ix.handler, &ix.file)?;
 
     let mut blocks: Vec<&'a syn::Block> = Vec::new();
     let mut visited = HashSet::new();
     visited.insert((file_idx, ix.handler.clone()));
-    collect_blocks(handler, index, &mut visited, 0, &mut blocks, attr_roots);
+    collect_blocks_scoped(handler, index, &mut visited, 0, &mut blocks, attr_roots, method_scope);
 
     // Alias seed: the handler's `program_id` parameter is an anchor.
     let mut aliases = HashMap::new();
@@ -1303,7 +1514,9 @@ fn analyze_instruction_graph<'a>(
         scan_expr(root, &mut block_aliases, ix, bundles, &mut comparisons);
     }
 
-    let mut canonical = reachable_canonical(&comparisons, seed_canonical(ix));
+    let mut canonical = seed_canonical(ix);
+    canonical.extend(extra_canonical.iter().copied());
+    canonical = reachable_canonical(&comparisons, canonical);
     canonical.extend(owner_checked_accounts(&blocks, ix));
 
     Some(InstructionGraph { blocks, comparisons, canonical })
@@ -1315,7 +1528,7 @@ fn analyze_instruction(
     bundles: &Bundles,
     attr_roots: &[Expr],
 ) -> Vec<Finding> {
-    let Some(graph) = analyze_instruction_graph(ix, index, bundles, attr_roots) else {
+    let Some(graph) = analyze_instruction_graph(ix, index, bundles, attr_roots, None, &HashSet::new()) else {
         return Vec::new();
     };
     sat031_findings(ix, &graph)
@@ -1423,6 +1636,12 @@ fn chain_summary(ix: &NativeInstruction, uf: &UnionFind, root: usize) -> String 
 /// The source field of a token-CPI accounts struct, and whether the pinned
 /// node is the token account's `.mint` (`true`) or the mint account's
 /// identity (`false`). Covers the anchor-spl transfer/mint/burn shapes.
+///
+/// `anchor_lang::system_program::Transfer` (a lamport transfer between
+/// system accounts) shares the struct name `Transfer` with the token
+/// transfer; the system variant has no `authority` field, so it is excluded
+/// here (checked in `walk_transfer_sources`) — a lamport source has no mint
+/// to anchor.
 fn transfer_source_field(name: &str) -> Option<(&str, bool)> {
     match name {
         "Transfer" | "TransferChecked" | "Burn" | "BurnChecked" => Some(("from", true)),
@@ -1445,12 +1664,106 @@ fn strip_wrapper_calls(e: &Expr) -> &Expr {
     }
 }
 
+/// Parses an `#[account(...)]` attribute's inner metas (mirrors the SAT032
+/// slice's helper). `#[account(mut, ...)]` opens with the `mut` keyword,
+/// which syn's `Meta` parser rejects; the keyword (and its trailing comma)
+/// is filtered out so the remaining metas (`has_one`, `token::mint`,
+/// `constraint`, ...) are readable.
+fn account_metas(attrs: &[syn::Attribute]) -> Vec<syn::Meta> {
+    let mut out = Vec::new();
+    for attr in attrs {
+        if !attr.path().is_ident("account") {
+            continue;
+        }
+        let syn::Meta::List(list) = &attr.meta else { continue };
+        let tokens = strip_mut_meta_keyword(list.tokens.clone());
+        if let Ok(metas) = syn::parse::Parser::parse2(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated, tokens)
+        {
+            out.extend(metas);
+        }
+    }
+    out
+}
+
+/// Removes a leading `mut` keyword (and its separating comma) from an
+/// `#[account(...)]` attribute's token stream so syn's `Meta` parser can
+/// read the rest.
+fn strip_mut_meta_keyword(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let raw: Vec<proc_macro2::TokenTree> = tokens.into_iter().collect();
+    let mut filtered = Vec::new();
+    let mut drop_next_comma = false;
+    for tt in raw {
+        if matches!(&tt, proc_macro2::TokenTree::Ident(i) if i == "mut") {
+            drop_next_comma = true;
+            continue;
+        }
+        if drop_next_comma && matches!(&tt, proc_macro2::TokenTree::Punct(p) if p.as_char() == ',') {
+            drop_next_comma = false;
+            continue;
+        }
+        drop_next_comma = false;
+        filtered.push(tt);
+    }
+    filtered.into_iter().collect()
+}
+
+/// `has_one = X` targets of an `#[account(...)]` attribute (the
+/// `X @ ErrorCode::...` annotation form cannot be parsed by syn in
+/// expression position, so it is invisible here — plain `has_one = X` is the
+/// shape used by the benchmark programs).
+fn has_one_targets(attrs: &[syn::Attribute]) -> Vec<String> {
+    let mut out = Vec::new();
+    for meta in account_metas(attrs) {
+        let syn::Meta::NameValue(nv) = meta else { continue };
+        if !nv.path.is_ident("has_one") {
+            continue;
+        }
+        if let Expr::Path(p) = &nv.value
+            && let Some(ident) = p.path.get_ident()
+        {
+            out.push(ident.to_string());
+        }
+    }
+    out
+}
+
+/// Whether an account slot is pinned by Anchor framework constraints on its
+/// field definition, making a token CPI through it anchored without any
+/// visible handler comparison: `token::mint = ...` pins a token account's
+/// mint, `address = ...` pins its address, `seeds = ...` makes it a
+/// program-derived address, and any field's `has_one = <this account>` pins
+/// the account's key to program-controlled state. The Anchor runtime enforces
+/// all of these before the handler runs — the Marinade-typed-mint class.
+fn constraint_anchored(name: &str, attrs: &[syn::Attribute], all_attrs: &HashMap<String, Vec<syn::Attribute>>) -> bool {
+    let pinned = account_metas(attrs).iter().any(|meta| {
+        let path = &meta.path();
+        path.is_ident("address")
+            || path.is_ident("seeds")
+            || (path.segments.len() == 2 && path.segments[0].ident == "token" && path.segments[1].ident == "mint")
+    });
+    if pinned {
+        return true;
+    }
+    all_attrs.values().any(|other| has_one_targets(other).iter().any(|target| target == name))
+}
+
 /// SAT033: a token transfer/mint CPI whose SOURCE token account's `.mint`
 /// (or the mint account's identity) is never compared against anything at all
 /// in the instruction's validation graph. SAT031 owns chains that ARE
 /// compared but unanchored; this fires only when the mint is never touched,
 /// keeping the two checks complementary.
-fn sat033_findings(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<Finding> {
+///
+/// The scan is scoped to the instruction's own graph (handler + its
+/// validation helpers) and skips:
+/// - system-program lamport `Transfer`s (no `authority` field — no mint),
+/// - sources whose field is framework-pinned via `#[account(...)]`
+///   constraints (`token::mint`/`address`/`seeds`/`has_one`) — the Anchor
+///   runtime verifies them before the handler runs.
+fn sat033_findings(
+    ix: &NativeInstruction,
+    graph: &InstructionGraph,
+    account_attrs: &HashMap<String, Vec<syn::Attribute>>,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut sources: Vec<(usize, bool)> = Vec::new();
     let mut seen = HashSet::new();
@@ -1469,6 +1782,9 @@ fn sat033_findings(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<Find
             continue;
         }
         let name = ix.accounts[acc_idx].name.clone();
+        if account_attrs.get(&name).is_some_and(|attrs| constraint_anchored(&name, attrs, account_attrs)) {
+            continue;
+        }
         let (source_label, target_label) =
             if is_mint_field { ("source token account", "`.mint`") } else { ("mint account", "identity (`.key`)") };
         findings.push(Finding {
@@ -1478,17 +1794,19 @@ fn sat033_findings(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<Find
             description: format!(
                 "Instruction `{}` performs a token transfer/mint CPI whose {source_label} `{name}` \
                  {target_label} is never compared against canonical state (a constant, the program \
-                 id, an owner-checked account, or a pinned registry). An attacker can supply a \
-                 token account (or mint) with an arbitrary mint, and the program has no visible \
-                 anchoring check to catch it — the Cashio-class shape focused on transfer paths. \
-                 Confirm whether the handler validates the mint elsewhere.",
+                 id, an owner-checked account, or a pinned registry) and is not pinned by an \
+                 Anchor `#[account(...)]` constraint. An attacker can supply a token account (or \
+                 mint) with an arbitrary mint, and the program has no visible anchoring check to \
+                 catch it — the Cashio-class shape focused on transfer paths. Confirm whether the \
+                 handler validates the mint elsewhere.",
                 ix.name
             ),
             location: Some(location(ix)),
             suggestion: Some(format!(
                 "Anchor the {source_label}'s mint identity before the CPI, e.g. \
-                 `assert_keys_eq!({name}.mint, EXPECTED_MINT)` or an \
-                 `#[account(constraint = {name}.mint == EXPECTED_MINT)]` on the Accounts field."
+                 `assert_keys_eq!({name}.mint, EXPECTED_MINT)`, an \
+                 `#[account(constraint = {name}.mint == EXPECTED_MINT)]` on the Accounts field, or \
+                 a `token::mint`/`has_one`/`seeds` account constraint."
             )),
         });
     }
@@ -1529,7 +1847,13 @@ fn walk_transfer_sources(
     match e {
         Expr::Struct(s) => {
             let struct_name = s.path.segments.last().map(|seg| seg.ident.to_string()).unwrap_or_default();
+            // The system program's lamport `Transfer` shares the struct name
+            // with the token transfer; it has no `authority` field and its
+            // `from` is a lamport source, not a token account — skip it.
+            let is_system_transfer = struct_name == "Transfer"
+                && !s.fields.iter().any(|f| matches!(&f.member, syn::Member::Named(n) if n == "authority"));
             if let Some((field, is_mint_field)) = transfer_source_field(&struct_name)
+                && !is_system_transfer
                 && let Some(source_field) =
                     s.fields.iter().find(|f| matches!(&f.member, syn::Member::Named(n) if n == field))
                 && let Side::AccountField(acc, _) =
@@ -1655,7 +1979,7 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
 
     let mut findings = Vec::new();
     for anchor in anchor_instructions(parsed) {
-        let (slots, account_types) = expand_accounts(&anchor.root_struct, &structs);
+        let (slots, account_types, account_attrs) = expand_accounts(&anchor.root_struct, &structs);
         if slots.is_empty() {
             continue;
         }
@@ -1686,11 +2010,21 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
             }
         }
 
-        let Some(graph) = analyze_instruction_graph(&ix, &index, &bundles, &roots) else {
+        // Method calls resolve to the receiving Accounts struct's impl only,
+        // so a generic helper name (`process`, `validate`, …) cannot pull
+        // every impl of that name into this instruction's graph. Accounts
+        // whose `#[account(seeds = ...)]` derivation references no
+        // instruction account are constant-seed PDAs — canonical anchors.
+        let method_scope = MethodScope { root: anchor.root_struct.clone(), account_types };
+        let extra_canonical = const_seed_pdas(&ix, &account_attrs);
+
+        let Some(graph) =
+            analyze_instruction_graph(&ix, &index, &bundles, &roots, Some(&method_scope), &extra_canonical)
+        else {
             continue;
         };
         findings.extend(sat031_findings(&ix, &graph));
-        findings.extend(sat033_findings(&ix, &graph));
+        findings.extend(sat033_findings(&ix, &graph, &account_attrs));
     }
     findings
 }
