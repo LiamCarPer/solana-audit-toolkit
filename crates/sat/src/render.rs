@@ -1,4 +1,5 @@
 use crate::analyzer::AnalysisContext;
+use crate::native::model::NativeProgram;
 use crate::types::{Confidence, Finding, Severity};
 use crate::ui;
 use colored::Colorize;
@@ -60,7 +61,22 @@ pub(crate) fn render_accounts_summary(ctx: &AnalysisContext) {
     println!();
 }
 
-pub(crate) fn render_instructions_summary(ctx: &AnalysisContext) {
+pub(crate) fn render_instructions_summary(ctx: &AnalysisContext, native_program: Option<&NativeProgram>) {
+    match native_program {
+        Some(program) => {
+            ui::print_section_header("Native Instruction Handlers");
+            println!("{}", native_instructions_summary(program));
+            println!();
+        }
+        None => render_anchor_instructions_summary(ctx),
+    }
+}
+
+/// Anchor workspace path: renders the `Instruction Handlers` block from the
+/// `SourceInstruction` records extracted out of `#[program]` modules.
+/// Byte-identical to the historical rendering; kept as the `None` branch of
+/// [`render_instructions_summary`].
+fn render_anchor_instructions_summary(ctx: &AnalysisContext) {
     if ctx.instructions.is_empty() {
         return;
     }
@@ -79,6 +95,80 @@ pub(crate) fn render_instructions_summary(ctx: &AnalysisContext) {
         );
     }
     println!();
+}
+
+/// Build the native instructions summary body for a resolved [`NativeProgram`]
+/// (everything after the section header): one line per instruction with name,
+/// handler, discriminator hex when present, and resolved account count — plus
+/// a footer counting resolved instructions and, when the frontend could not
+/// recover per-instruction dispatch, an honest warning.
+///
+/// The returned text is TTY-aware: `colored` emits ANSI codes only when
+/// stdout is a terminal, so integration tests see plain text.
+pub fn native_instructions_summary(program: &NativeProgram) -> String {
+    let entrypoint = format!("{}:{}", program.entrypoint_file, program.entrypoint_line);
+    let mut lines: Vec<String> = Vec::new();
+
+    if program.instructions.is_empty() {
+        lines.push(format!("  {} No instructions resolved from entrypoint {entrypoint}.", "WARN".yellow()));
+        lines.push(format!("  {} frontend dispatch recovery is limited for this program style", "---".cyan()));
+        return lines.join("\n");
+    }
+
+    lines.push(format!(
+        "  {} Resolved {} native instruction(s) from entrypoint {entrypoint}:",
+        "---".cyan(),
+        program.instructions.len()
+    ));
+
+    let mut with_accounts = 0usize;
+    for ix in &program.instructions {
+        if !ix.accounts.is_empty() {
+            with_accounts += 1;
+        }
+        let handler = if ix.handler.is_empty() { "(inline)".to_string() } else { ix.handler.clone() };
+        let discriminator = ix
+            .discriminator
+            .as_ref()
+            .map(|bytes| format!("[0x{}]", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+            .unwrap_or_else(|| "(no discriminator)".to_string());
+        // Zero-account instructions mean the frontend could not resolve the
+        // handler's account list — mark them so the gap stays visible.
+        let account_count = if ix.accounts.is_empty() {
+            format!("{} {}", "accounts: 0".yellow(), "(!)".yellow())
+        } else {
+            format!("accounts: {}", ix.accounts.len())
+        };
+        lines.push(format!(
+            "  {} {}  {}  {}  {}",
+            "-".blue(),
+            ix.name.bold(),
+            format!("handler: {handler}").dimmed(),
+            discriminator.dimmed(),
+            account_count,
+        ));
+    }
+
+    lines.push(format!(
+        "  {} {} instructions resolved ({} with resolved accounts)",
+        "---".cyan(),
+        program.instructions.len(),
+        with_accounts
+    ));
+    if dispatch_recovery_limited(program) {
+        lines.push(format!("  {} frontend dispatch recovery is limited for this program style", "WARN".yellow()));
+    }
+    lines.join("\n")
+}
+
+/// True when the program has an entrypoint but the frontend resolved few or
+/// no instructions: either nothing at all, or only the single fallback
+/// instruction (the entrypoint handler itself, no discriminator), which means
+/// the dispatch style (e.g. `unpack()`-based enums or macro-generated
+/// entrypoints) is not statically recoverable.
+fn dispatch_recovery_limited(program: &NativeProgram) -> bool {
+    program.instructions.is_empty()
+        || (program.instructions.len() == 1 && program.instructions[0].discriminator.is_none())
 }
 
 fn compute_discriminator_display(name: &str) -> String {

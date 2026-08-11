@@ -1591,7 +1591,7 @@ pub fn run(
         render::render_triage_findings(&output.findings);
     } else {
         render::render_accounts_summary(&output.ctx);
-        render::render_instructions_summary(&output.ctx);
+        render::render_instructions_summary(&output.ctx, output.native_program.as_ref());
         render::render_findings(&output.findings);
     }
     render::render_summary(&output.findings);

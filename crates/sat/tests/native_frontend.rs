@@ -201,6 +201,70 @@ fn fixture_dispatch_tag_falls_back_to_instruction_0x_names() {
     assert!(account(update, "state").key_checked);
 }
 
+// ── Dispatch: borsh try_from_slice inside impl-method processor ─────────────
+
+#[test]
+fn fixture_try_from_slice_follows_delegation_and_shank_accounts() {
+    let p = analyze_fixture("fixture_try_from_slice.rs");
+    assert_eq!(p.instructions.len(), 3);
+
+    let initialize = &p.instructions[0];
+    assert_eq!(initialize.name, "Initialize");
+    assert_eq!(initialize.discriminator, Some(vec![0]), "borsh tag = declaration order");
+    assert_eq!(initialize.handler, "process_initialize", "Self:: method handler recovered");
+    assert_eq!(account_names(initialize), ["payer", "state"], "shank names win over handler bindings");
+    assert!(account(initialize, "payer").is_signer_checked, "handler signer guard survives shank merge");
+
+    let deposit = &p.instructions[1];
+    assert_eq!(deposit.name, "Deposit");
+    assert_eq!(deposit.discriminator, Some(vec![1]));
+    assert_eq!(account_names(deposit), ["state", "authority", "token_account"]);
+    assert_eq!(account(deposit, "authority").kind, AccountKind::Signer, "shank signer flag maps to kind");
+
+    let withdraw = &p.instructions[2];
+    assert_eq!(withdraw.name, "Withdraw");
+    assert_eq!(withdraw.discriminator, Some(vec![2]));
+    assert_eq!(account_names(withdraw), ["state", "authority"], "no shank attrs -> handler positional");
+}
+
+// ── Dispatch: split_at account destructuring ────────────────────────────────
+
+#[test]
+fn fixture_split_at_tracks_both_slice_halves_positionally() {
+    let p = analyze_fixture("fixture_split_at.rs");
+    assert_eq!(p.instructions.len(), 1);
+    let ix = &p.instructions[0];
+
+    assert_eq!(account_names(ix), ["state", "authority", "vault", "account_3"]);
+    for (i, a) in ix.accounts.iter().enumerate() {
+        assert_eq!(a.index, i, "split_at continuation must keep positional order");
+    }
+    assert!(account(ix, "authority").is_signer_checked, "guard inside the destructured head");
+}
+
+// ── Dispatch: framework-macro token recovery (solitaire! class) ─────────────
+
+#[test]
+fn fixture_macro_dispatch_recovers_solitaire_rows() {
+    let source = fixture_source("fixture_macro_dispatch.rs");
+    let p = analyze_fixture("fixture_macro_dispatch.rs");
+
+    assert_eq!(p.instructions.len(), 8, "one instruction per solitaire! row");
+    let line = source.lines().position(|l| l.contains("solitaire! {")).map(|i| i + 1).unwrap();
+    assert_eq!(p.entrypoint_line, line, "entrypoint line is the macro invocation line");
+
+    for (i, ix) in p.instructions.iter().enumerate() {
+        assert_eq!(ix.discriminator, Some(vec![i as u8]), "borsh order = declaration order");
+        assert!(ix.accounts.is_empty(), "framework-peeled accounts stay unresolved");
+    }
+    assert_eq!(p.instructions[0].name, "Initialize");
+    assert_eq!(p.instructions[0].handler, "initialize");
+    assert_eq!(p.instructions[3].name, "SetFees");
+    assert_eq!(p.instructions[3].handler, "set_fees");
+    assert_eq!(p.instructions[7].name, "VerifySignatures");
+    assert_eq!(p.instructions[7].handler, "verify_signatures");
+}
+
 // ── Mango-style composite ───────────────────────────────────────────────────
 
 #[test]
