@@ -13,6 +13,43 @@
 //! reasoning are documented approximations (see `docs/NATIVE_BACKEND.md`
 //! section 6) — manual steps cover them.
 //!
+//! # Helper-guard recognition (SAT019/SAT020/SAT021 FP filter)
+//!
+//! A second, deliberately narrow layer scans each *handler body* for calls to
+//! a curated whitelist of helper functions whose very name is a guard
+//! contract. The frontend cannot see through these helpers (e.g. Jito's
+//! `Config::load(program_id, config, ..)` is skipped because its first
+//! parameter is a `Pubkey`, not an `AccountInfo`), so without this layer
+//! guarded accounts fire SAT019/SAT020/SAT021 — the Jito restaking/vault
+//! corpus is 100% false positives of exactly this shape.
+//!
+//! Whitelist → flag mapping (exact callee-name match + argument variable equal
+//! to a resolved account name, both in the same handler body):
+//! - Signer helpers `load_signer` / `require_signer` / `check_signer` /
+//!   `assert_signer` → `is_signer_checked`.
+//! - Owner-loading helpers: any `load_*` whose name contains a program-kind
+//!   word (`system_account`, `token_account`, `token_mint`,
+//!   `associated_token_account`, `mpl_metadata_program`) → `owner_checked`.
+//!   This covers `load_system_account`, `load_token_account`,
+//!   `load_token_mint`, `load_associated_token_account` and
+//!   `load_mpl_metadata_program` exactly. Bare `load`/`load_checked` are
+//!   NEVER treated as owner checks (Mango's `TokenAccount::load_checked` /
+//!   `Loadable::load` check nothing and must keep firing SAT020).
+//! - State-type loads `<StateType>::load(..)`: name exactly `load` (never
+//!   `load_checked`), a receiver type segment that is not `Self`, and the
+//!   account argument classified by the frontend as `AccountKind::State` or
+//!   `AccountKind::Unchecked` → `owner_checked` + `key_checked` (the Jito/SDI
+//!   `X::load` helpers verify owner, discriminator and canonical PDA).
+//!   Token/mint/program-kind accounts are excluded so a bare `load` on a
+//!   token account still fires.
+//! - Authority-key helpers `check_admin` / `check_delegate_admin` /
+//!   `check_staker` / `check_authority` / `check_owner` called with a
+//!   `<account>.key` argument → `key_checked`.
+//!
+//! The scan is per handler body only (no helper-body recursion): whitelisted
+//! names are trusted as the guard contract, and anything else is handled by
+//! the frontend's own reachability analysis.
+//!
 //! Title prefixes are load-bearing for SARIF classification (section 7);
 //! do not rename them.
 
@@ -28,6 +65,32 @@ use crate::types::{Finding, Severity};
 const SAT019_TITLE: &str = "Unverified Signer Account:";
 const SAT020_TITLE: &str = "Unverified Owner Account:";
 const SAT021_TITLE: &str = "Unchecked Authority Key:";
+
+// ── Helper-guard whitelists ─────────────────────────────────────────────────
+//
+// Curated, exact-name whitelists for the handler-body helper scan (see the
+// module docs). These names ARE the guard contract; anything not listed here
+// is never treated as a guard by this layer.
+
+/// Signer-requiring helpers (pattern 1): verified against Jito's
+/// `jito_jsm_core::loader::load_signer`, which errors on `!info.is_signer`.
+const SIGNER_HELPERS: [&str; 4] = ["load_signer", "require_signer", "check_signer", "assert_signer"];
+
+/// Authority-key equality helpers (pattern 4): verified against Jito's
+/// `check_admin` / `check_delegate_admin` / `check_staker` methods, which
+/// compare the argument key to a stored authority key.
+const AUTHORITY_KEY_HELPERS: [&str; 5] =
+    ["check_admin", "check_delegate_admin", "check_staker", "check_authority", "check_owner"];
+
+/// Program-kind words (pattern 2): a `load_*` helper whose name contains one
+/// of these verifies `owner == expected program`.
+const PROGRAM_KIND_WORDS: [&str; 5] =
+    ["system_account", "token_account", "token_mint", "associated_token_account", "mpl_metadata_program"];
+
+/// True when the callee name is an owner-checking `load_*` helper.
+fn is_owner_loader(name: &str) -> bool {
+    name.starts_with("load_") && PROGRAM_KIND_WORDS.iter().any(|w| name.contains(w))
+}
 
 /// Whether the account name marks it as privileged. Mirrors the Anchor
 /// backend's `check_missing_signer` name list plus the spec's suffix rules
@@ -162,20 +225,24 @@ fn sat021(ix: &NativeInstruction, account: &ResolvedAccount) -> Finding {
 /// inherent to the iteration, and findings are never merged across
 /// instructions even when they refer to the same account name.
 pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding> {
-    let mut classifier = CpiClassifier::new(parsed);
+    let index = Rc::new(FnIndex::build(parsed));
+    let mut classifier = CpiClassifier::new(index.clone());
+    let scanner = HelperGuardScanner { index };
     let mut findings = Vec::new();
     for ix in &program.instructions {
+        // Handler-body helper guards (whitelisted names only, see module docs).
+        let guards = scanner.guard_set(ix);
         for account in &ix.accounts {
             let authority_named = is_authority_named(&account.name);
             let stateful = matches!(account.kind, AccountKind::State | AccountKind::TokenAccount | AccountKind::Mint);
 
+            let signer_ok = account.is_signer_checked || guards.signer.contains(&account.name);
+            let owner_ok = account.owner_checked || guards.owner.contains(&account.name);
+            let key_ok = account.key_checked || guards.key.contains(&account.name);
+
             // SAT019: authority-named, signature never verified, not a
             // `Signer` by construction, key not pinned.
-            if authority_named
-                && !account.is_signer_checked
-                && account.kind != AccountKind::Signer
-                && !account.key_checked
-            {
+            if authority_named && !signer_ok && account.kind != AccountKind::Signer && !key_ok {
                 findings.push(sat019(ix, account));
             }
 
@@ -184,8 +251,8 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
             // known validating builtin.
             if !is_builtin(account.kind)
                 && (stateful || account.written)
-                && !account.owner_checked
-                && !account.key_checked
+                && !owner_ok
+                && !key_ok
                 && !classifier.is_cpi_passed_only(ix, account)
             {
                 findings.push(sat020(ix, account));
@@ -193,12 +260,129 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
 
             // SAT021: authority-named, key never compared, signature never
             // verified.
-            if authority_named && !account.key_checked && !account.is_signer_checked {
+            if authority_named && !key_ok && !signer_ok {
                 findings.push(sat021(ix, account));
             }
         }
     }
     findings
+}
+
+// ── Helper-guard recognition ────────────────────────────────────────────────
+//
+// Guard flags produced by whitelisted helper calls found in the handler body.
+// See the module docs for the whitelist → flag mapping and its rationale.
+
+#[derive(Debug, Clone, Default)]
+struct GuardSet {
+    /// Accounts passed to a whitelisted signer helper (`load_signer`, ...).
+    signer: HashSet<String>,
+    /// Accounts passed to a whitelisted owner-loading helper
+    /// (`load_system_account`, `load_token_account`, ...).
+    owner: HashSet<String>,
+    /// Accounts passed to a whitelisted authority-key helper with a `.key`
+    /// argument, or to a state-type `<StateType>::load`.
+    key: HashSet<String>,
+}
+
+/// Scans handler bodies for whitelisted guard-helper calls.
+struct HelperGuardScanner {
+    index: Rc<FnIndex>,
+}
+
+impl HelperGuardScanner {
+    /// The bare variable an expression peels to (`acct`, `&acct`, `(acct)`).
+    fn bare_var(e: &syn::Expr) -> Option<String> {
+        match peel(e) {
+            syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+            _ => None,
+        }
+    }
+
+    /// The account variable of a `<var>.key` argument (wrappers allowed):
+    /// `old_admin.key`, `&old_admin.key`.
+    fn key_var(e: &syn::Expr) -> Option<String> {
+        match peel(e) {
+            syn::Expr::Field(f) if member_name(&f.member) == "key" => Self::bare_var(&f.base),
+            _ => None,
+        }
+    }
+
+    /// Guard sets for one instruction, from its handler body.
+    fn guard_set(&self, ix: &NativeInstruction) -> GuardSet {
+        let mut out = GuardSet::default();
+        let Some(handler) = self.index.lookup(&ix.handler, &ix.file) else {
+            return out;
+        };
+        // Name → frontend kind, for the pattern-3 State/Unchecked gate.
+        let kinds: HashMap<&str, AccountKind> = ix.accounts.iter().map(|a| (a.name.as_str(), a.kind)).collect();
+        let names: HashSet<&str> = ix.accounts.iter().map(|a| a.name.as_str()).collect();
+
+        let mut signer = HashSet::new();
+        let mut owner = HashSet::new();
+        let mut key = HashSet::new();
+        walk_all(&handler.block, &mut |e| match e {
+            syn::Expr::Call(c) => {
+                let Some(callee) = path_key(&c.func) else { return };
+                let segments: Vec<&str> = callee.split("::").collect();
+                let last = segments.last().copied().unwrap_or("");
+                let account_args = |out: &mut HashSet<String>| {
+                    for arg in &c.args {
+                        if let Some(v) = Self::bare_var(arg)
+                            && names.contains(v.as_str())
+                        {
+                            out.insert(v);
+                        }
+                    }
+                };
+                if SIGNER_HELPERS.contains(&last) {
+                    account_args(&mut signer);
+                }
+                if is_owner_loader(last) {
+                    account_args(&mut owner);
+                }
+                // `<StateType>::load`: exact name `load` (never `load_checked`),
+                // a receiver type segment that is not `Self`, and an account
+                // classified `State`/`Unchecked` by the frontend.
+                if segments.len() >= 2 && last == "load" && segments[segments.len() - 2] != "Self" {
+                    for arg in &c.args {
+                        if let Some(v) = Self::bare_var(arg)
+                            && matches!(kinds.get(v.as_str()), Some(AccountKind::State | AccountKind::Unchecked))
+                        {
+                            owner.insert(v.clone());
+                            key.insert(v);
+                        }
+                    }
+                }
+                if AUTHORITY_KEY_HELPERS.contains(&last) {
+                    for arg in &c.args {
+                        if let Some(v) = Self::key_var(arg)
+                            && names.contains(v.as_str())
+                        {
+                            key.insert(v);
+                        }
+                    }
+                }
+            }
+            syn::Expr::MethodCall(m) => {
+                let method = m.method.to_string();
+                if AUTHORITY_KEY_HELPERS.contains(&method.as_str()) {
+                    for arg in &m.args {
+                        if let Some(v) = Self::key_var(arg)
+                            && names.contains(v.as_str())
+                        {
+                            key.insert(v);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        });
+        out.signer = signer;
+        out.owner = owner;
+        out.key = key;
+        out
+    }
 }
 
 // ── SAT020 CPI-passed-only suppression ───────────────────────────────────────
@@ -641,7 +825,7 @@ fn push_fn(by_name: &mut HashMap<String, Vec<Rc<FnDef>>>, sig: syn::Signature, b
 /// Classifies how a resolved account is used inside its instruction's handler
 /// call graph, to decide SAT020's CPI-passed-only suppression.
 struct CpiClassifier {
-    index: FnIndex,
+    index: Rc<FnIndex>,
     memo: HashMap<(String, String), UseClass>,
     computing: HashSet<(String, String)>,
 }
@@ -662,8 +846,8 @@ struct Walk<'a> {
 }
 
 impl CpiClassifier {
-    fn new(files: &[(syn::File, String)]) -> Self {
-        CpiClassifier { index: FnIndex::build(files), memo: HashMap::new(), computing: HashSet::new() }
+    fn new(index: Rc<FnIndex>) -> Self {
+        CpiClassifier { index, memo: HashMap::new(), computing: HashSet::new() }
     }
 
     /// True when every use of `account` in `ix` is a pass-through to a CPI

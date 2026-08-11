@@ -383,3 +383,161 @@ fn written_unchecked_account_without_owner_check_is_reported() {
     assert!(findings[0].title.starts_with(SAT020), "{}", findings[0].title);
     assert_eq!(findings[0].severity, Severity::High);
 }
+
+// ── Helper-guard recognition (SAT019/SAT020/SAT021 FP filter) ───────────────
+
+#[test]
+fn helper_guarded_fixture_resolves_unguarded_flags() {
+    // Model sanity: the helper-guard suppression must not be vacuous — the
+    // frontend resolves all three accounts as unguarded (no signer check, no
+    // owner check, no key pinning), so without the helper layer the fixture
+    // would fire all three rules.
+    let (program, _) = run_auth_fixture("helper_guarded.rs");
+    assert_eq!(program.instructions.len(), 1);
+    let ix = &program.instructions[0];
+
+    let admin = account(ix, "admin");
+    assert!(!admin.is_signer_checked, "helper_guarded: frontend sees no signer guard");
+    assert!(!admin.key_checked, "helper_guarded: frontend sees no key pin");
+
+    let state = account(ix, "state");
+    assert!(state.written, "helper_guarded: state data is written");
+    assert!(!state.owner_checked, "helper_guarded: frontend sees no owner guard");
+
+    let config = account(ix, "config");
+    assert!(config.written, "helper_guarded: config data is written");
+    assert!(!config.owner_checked && !config.key_checked, "helper_guarded: frontend sees no owner guard");
+}
+
+#[test]
+fn helper_guarded_fixture_is_clean() {
+    // `load_signer(admin, ..)` + `load_system_account(state, ..)` +
+    // `Config::load(program_id, config, ..)` in the handler body suppress
+    // SAT019 / SAT020 / SAT021 for those accounts.
+    let (_, findings) = run_auth_fixture("helper_guarded.rs");
+    assert!(findings.is_empty(), "helper-guarded accounts must not fire: {findings:?}");
+}
+
+#[test]
+fn no_helper_fixture_fires_all_three_rules() {
+    // Same accounts without the helper calls: SAT019 / SAT020 / SAT021 fire.
+    let (_, findings) = run_auth_fixture("no_helper.rs");
+    assert_eq!(by_rule(&findings, SAT019).len(), 1, "{findings:?}");
+    assert_eq!(by_rule(&findings, SAT020).len(), 2, "{findings:?}");
+    assert_eq!(by_rule(&findings, SAT021).len(), 1, "{findings:?}");
+    assert_eq!(by_rule_account(&findings, SAT019, "admin").len(), 1);
+    assert_eq!(by_rule_account(&findings, SAT020, "state").len(), 1);
+    assert_eq!(by_rule_account(&findings, SAT020, "config").len(), 1);
+    assert_eq!(by_rule_account(&findings, SAT021, "admin").len(), 1);
+    assert_eq!(findings.len(), 4, "{findings:?}");
+}
+
+#[test]
+fn mango_shape_load_checked_is_not_a_guard() {
+    // Regression control (Mango RecoveryWithdraw* shape):
+    // `TokenAccount::load_checked(token_account)` checks nothing, so SAT020
+    // must still fire — the curated whitelist never treats bare
+    // `load`/`load_checked` as an owner check.
+    let (_, findings) = run_auth_fixture("mango_shape_control.rs");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].title.starts_with(SAT020), "{}", findings[0].title);
+    assert!(findings[0].title.contains("`token_account`"), "{}", findings[0].title);
+    assert_eq!(findings[0].severity, Severity::High);
+}
+
+#[test]
+fn state_load_on_token_kind_account_is_not_a_guard() {
+    // Pattern-3 kind gate: `<Type>::load` on an account the frontend
+    // classified `TokenAccount` must not be treated as an owner check
+    // (Mango `Loadable::load`-style shapes on token accounts keep firing).
+    let src = r#"
+        use solana_program::{
+            account_info::{next_account_info, AccountInfo},
+            entrypoint,
+            entrypoint::ProgramResult,
+            pubkey::Pubkey,
+        };
+        entrypoint!(process_instruction);
+        pub fn process_instruction(
+            program_id: &Pubkey,
+            accounts: &[AccountInfo],
+            _instruction_data: &[u8],
+        ) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let token_account = next_account_info(accounts_iter)?;
+            TokenThing::load(program_id, token_account)?;
+            let mut data = token_account.data.borrow_mut();
+            data[0] = 1;
+            Ok(())
+        }
+    "#;
+    let (_, findings) = run_auth(src);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].title.starts_with(SAT020), "{}", findings[0].title);
+    assert!(findings[0].title.contains("`token_account`"), "{}", findings[0].title);
+}
+
+#[test]
+fn authority_key_helper_pins_the_authority_key() {
+    // Pattern 4: `state.check_admin(admin.key)` is an authority-key equality
+    // helper — SAT021 (and SAT019) must not fire for `admin`. SAT020 still
+    // fires for the written, owner-unchecked `state`.
+    let src = r#"
+        use solana_program::{
+            account_info::{next_account_info, AccountInfo},
+            entrypoint,
+            entrypoint::ProgramResult,
+            pubkey::Pubkey,
+        };
+        entrypoint!(process_instruction);
+        pub fn process_instruction(
+            _program_id: &Pubkey,
+            accounts: &[AccountInfo],
+            _instruction_data: &[u8],
+        ) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let state = next_account_info(accounts_iter)?;
+            let admin = next_account_info(accounts_iter)?;
+            let mut data = state.data.borrow_mut();
+            let state = State::try_from_slice_unchecked_mut(&mut data)?;
+            state.check_admin(admin.key)?;
+            Ok(())
+        }
+    "#;
+    let (_, findings) = run_auth(src);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].title.starts_with(SAT020), "{}", findings[0].title);
+    assert!(findings[0].title.contains("`state`"), "{}", findings[0].title);
+    assert!(by_rule_account(&findings, SAT021, "admin").is_empty());
+    assert!(by_rule_account(&findings, SAT019, "admin").is_empty());
+}
+
+#[test]
+fn helper_guards_are_exact_name_matches() {
+    // `load_signer_extra` is NOT in the whitelist: SAT019 / SAT021 must still
+    // fire for `admin` (exact callee-name matching, no prefix fuzz).
+    let src = r#"
+        use solana_program::{
+            account_info::{next_account_info, AccountInfo},
+            entrypoint,
+            entrypoint::ProgramResult,
+            msg,
+            pubkey::Pubkey,
+        };
+        entrypoint!(process_instruction);
+        pub fn process_instruction(
+            _program_id: &Pubkey,
+            accounts: &[AccountInfo],
+            _instruction_data: &[u8],
+        ) -> ProgramResult {
+            let accounts_iter = &mut accounts.iter();
+            let admin = next_account_info(accounts_iter)?;
+            load_signer_extra(admin, true)?;
+            msg!("admin: {}", admin.key);
+            Ok(())
+        }
+    "#;
+    let (_, findings) = run_auth(src);
+    assert_eq!(by_rule_account(&findings, SAT019, "admin").len(), 1, "{findings:?}");
+    assert_eq!(by_rule_account(&findings, SAT021, "admin").len(), 1, "{findings:?}");
+}
