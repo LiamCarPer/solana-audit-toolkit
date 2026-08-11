@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod audit;
 pub mod cpi;
 pub mod deserialization;
 pub mod fuzzer;

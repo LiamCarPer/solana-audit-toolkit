@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod analyzer;
+mod audit;
 mod cpi;
 mod deserialization;
 mod fuzzer;
@@ -56,6 +57,17 @@ enum Commands {
     Report {
         #[command(subcommand)]
         action: ReportAction,
+    },
+    /// Generate an automated markdown audit report
+    Audit {
+        /// Path to the source directory or file (same as `analyze src`)
+        path: Option<String>,
+        /// Output markdown file
+        #[arg(long, default_value = "audit-report.md")]
+        out: String,
+        /// Transaction analysis report JSON for correlation findings
+        #[arg(long)]
+        tx_report: Option<String>,
     },
     /// Generate Kani formal-verification scaffolding
     Verify {
@@ -139,6 +151,7 @@ fn main() -> Result<()> {
         Commands::Report { action } => match action {
             ReportAction::New => reporter::new_finding(),
         },
+        Commands::Audit { path, out, tx_report } => audit::run(path.as_deref(), Some(&out), tx_report.as_deref()),
         Commands::Verify { action } => match action {
             VerifyAction::Init => verify::init(),
         },
