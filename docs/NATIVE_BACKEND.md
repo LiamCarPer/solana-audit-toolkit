@@ -204,7 +204,9 @@ Findings are heuristic leads — manual verification is required.
 | R2 | `src/native/rules/pda_cei.rs` (SAT022/023) + fixtures | pinned model only |
 | R3 | `src/native/rules/lifecycle.rs` (SAT024/025/026/027) + fixtures | pinned model only |
 | R4 | `src/native/rules/cpi.rs` (SAT028/029/030) + fixtures | pinned model only |
-| R5 | `src/native/rules/validate.rs` (SAT031) + fixtures | pinned model only |
+| R5 | `src/native/rules/validate.rs` (SAT031, SAT033) + fixtures | pinned model only; shares helpers with R6/R7 |
+| R6 | `src/native/rules/state_creation.rs` (SAT032, Anchor path) + fixtures | R5's shared helpers |
+| R7 | `src/native/rules/oracle.rs` (SAT034/035/036, native path) + fixtures | R5's `FnIndex`/`collect_blocks` |
 | I (integration) | `lib.rs`, `main.rs`, `analyzer.rs` (run wiring), `sarif.rs`, `tests/native_analysis.rs` harness | all of the above landed |
 
 Rule modules export `pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding>`.
