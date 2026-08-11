@@ -337,3 +337,94 @@ no native marker visible). Mango regression check (must stay 3x SAT020 leads +
 **Excluded (documented):** Drift v2 (no public repos), Jupiter main swap
 (closed-source), jito-lst (not public), Amulet/Cypher source (repos gone —
 writeup-only corpus entries, see `docs/EXPLOIT_CORPUS.md`).
+
+---
+
+# Phase 1: money-engine buildout (2026-08-11)
+
+Frontend dispatch depth, new recall rules, PoC auto-resolution, and the
+precision round that followed — all bench-verified on the same pinned targets.
+
+## Dispatch depth (engagement was the recall ceiling)
+
+| Target | Before | After |
+|---|---|---|
+| SDI (borsh enum-unpack `try_from_slice` in an impl-method processor) | 1 instruction / 0 accounts | **9 instructions, all with resolved accounts** (shank `#[account(N)]` layouts, tags 0x00-0x08) |
+| Jito vault (`split_at` destructuring) | 3 handlers with 0 accounts | MintTo 10, EnqueueWithdrawal 10, BurnWithdrawalTicket 13 accounts |
+| Wormhole bridge (`solitaire!` macro-generated entrypoint/dispatch) | 0 instructions | **8 instructions recovered from the macro token table** (order-derived tags, framework-peeled accounts documented) |
+| Jito restaking | 25 | 25 (no regression) |
+
+Frontend changes: `try_from_slice`/`try_from_slice_unchecked` recognized as
+enum decoders (borsh declaration-order tag fallback), entrypoint delegation
+into impl-method processors followed, `split_at` slice tracking, and macro-token
+dispatch recovery (`FRAMEWORK_DISPATCH_MACROS`, extensible). Native instruction
+rendering added to the text output ("Native Instruction Handlers" block with
+per-instruction name/handler/discriminator/account count + an honest
+dispatch-recovery warning).
+
+## New rules (their agents landed SAT032-036; SAT037 is this round's recall rule)
+
+- SAT031 Self-Referential Validation (Cashio class), SAT032 Permissionless
+  State Creation, SAT033 Unanchored Token Mint, SAT034-036 oracle price-feed
+  rules, **SAT037 Sysvar-Introspection Misuse** (this round).
+
+## Wormhole recall RE-VERDICT: NOT-DETECTED ? DETECTED (SAT037)
+
+With dispatch depth + SAT037, the exploit-era tree (commit `79ab522`) now
+yields 2 HIGH SAT037 findings at exactly the pre-exploit call sites
+(`api/verify_signature.rs:92` `load_current_index`, `:101` `load_instruction_at`,
+both on `&accs.instruction_acc.try_borrow_mut_data()`). The first verified
+native recall datapoint. Corpus status updated to DETECTED.
+
+## Precision round (fix-everything, on real-code explosions)
+
+1. **FIXED — SAT032/033 Anchor-fallback explosion (Marinade 88 findings / 77 HIGH):**
+   their Anchor fallback ran SAT031/032/033 on every Anchor workspace; three
+   bugs surfaced: phantom-bundle expansion of plain `#[account]` data structs,
+   bare-name `ctx.accounts.process(...)` method following pulling every impl,
+   and system `Transfer` (lamports) misclassified as a token mint. Also
+   `#[account(mut, ...)]` attributes were parsed to zero metas (`mut` broke
+   `syn::Meta` parsing) — a pre-existing bug in both rules. Fixed with a
+   `#[derive(Accounts)]`-only bundle index, scoped method resolution, and
+   framework-constraint anchoring (typed-mint `token::mint`/`has_one`/`seeds`
+   pins + constant-seed PDAs as canonical anchors). **Marinade back to 11
+   findings; Cashio recall byte-identical (new_bank 3x SAT032, brrr 10x SAT031).**
+2. **FIXED — SDI auth-rule explosion (40 HIGH) after dispatch depth:** the
+   newly-resolved SDI instructions exposed the guard-recognition gap; auth.rs
+   gained handler-variable attribution (positional binding enumeration bridging
+   shank names, e.g. `deposit_stake_authority_info` ? `deposit_authority`),
+   recorded-vs-enforced distinction, and deserialize-data-variable tracking.
+   **SDI 40 ? 7 HIGH** — residual: push-transfer `new_authority`/`new_owner`
+   (documented class) + 2x `pool_mint` (whitelist-mint check is not yet
+   recognized) + the honest transfer-fee keep on `transfer_tokens_cpi`.
+3. **FIXED — Token-2022 transfer-fee precision:** approve/delegate paths no
+   longer count as transfers (transfer-whitelist, not approve-blacklist).
+   SDI 2?1 HIGH (kept the genuine `transfer_checked` invoke), restaking 2?0,
+   vault 1?0. Fee-keyword suppression extended (`TransferFeeConfig`,
+   `get_transfer_fee`).
+
+## PoC auto-resolution (sat poc)
+
+Generated PoC crates now auto-resolve program id (declare_id/IDL), Anchor
+instruction discriminator (`sha256("global:<ix>")[..8]`) + borsh handler args
+with boundary defaults, native dispatch tags, ordered AccountMetas with
+signer/writable flags, PDA seeds (`find_program_address` inline) and Anchor
+state account data (real account discriminator + zero-filled default). The
+only remaining EDIT ME markers are raw data bytes for untyped accounts.
+Compile-proof: generated crate + a minimal real Anchor program
+(`cargo check` PASSED); 8 generated tests compile byte-identical against a
+stub harness.
+
+## Final state on the pinned targets (frozen binary)
+
+| Target | Findings |
+|---|---|
+| Marinade LSP | 11 (10 LOW hardening + INFO) |
+| Jito TipRouter | 10 (5 HIGH has_one-guard FPs, 4 LOW, INFO) |
+| SDI | 7 HIGH (documented residuals) |
+| Jito restaking | 31 (6 HIGH) |
+| Jito vault | 40 (8 HIGH, 32 MED) |
+| Wormhole (79ab522) | 3 (2 HIGH SAT037 + INFO) |
+| Mango (regression) | 6 (unchanged) |
+
+Rule inventory: SAT001-SAT037. Tests: 462.
