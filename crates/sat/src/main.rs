@@ -25,6 +25,7 @@ mod tx_report;
 mod types;
 mod ui;
 mod verify;
+mod watch;
 
 #[derive(Parser)]
 #[command(
@@ -68,6 +69,14 @@ enum Commands {
         /// Transaction analysis report JSON for correlation findings
         #[arg(long)]
         tx_report: Option<String>,
+    },
+    /// Diff findings across scans of watched program repos
+    Watch {
+        /// Watch configuration JSON (list of repos)
+        config: String,
+        /// Directory for scan state and clones
+        #[arg(long, default_value = ".sat-watch")]
+        out_dir: String,
     },
     /// Generate Kani formal-verification scaffolding
     Verify {
@@ -152,6 +161,7 @@ fn main() -> Result<()> {
             ReportAction::New => reporter::new_finding(),
         },
         Commands::Audit { path, out, tx_report } => audit::run(path.as_deref(), Some(&out), tx_report.as_deref()),
+        Commands::Watch { config, out_dir } => watch::run(&config, &out_dir),
         Commands::Verify { action } => match action {
             VerifyAction::Init => verify::init(),
         },

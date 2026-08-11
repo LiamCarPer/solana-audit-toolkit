@@ -22,3 +22,4 @@ pub mod tx_report;
 pub mod types;
 pub mod ui;
 pub mod verify;
+pub mod watch;

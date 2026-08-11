@@ -1,0 +1,28 @@
+name: watch
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build sat
+        run: cargo build --release
+      # The watch config is user-provided: a JSON list of repos to scan
+      # (see `sat watch --help` / crates/sat/src/watch.rs for the schema).
+      # Repos without a `url` are scanned relative to this checkout.
+      - name: Run release delta scanner
+        run: ./target/release/sat watch watch-config.json .sat-watch
+      - name: Upload scan state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sat-watch-state
+          path: .sat-watch
+          if-no-files-found: ignore
