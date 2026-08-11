@@ -173,6 +173,11 @@ const RULES: &[(&str, &str, &str)] = &[
         "Oracle Decimals/Exponent Mismatch",
         "A price-feed account's exponent field is never consumed, so raw feed integers are used without their scale.",
     ),
+    (
+        "SAT037",
+        "Sysvar-Introspection Misuse",
+        "Unchecked sysvar introspection parses caller-supplied account data without a sysvar address check.",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -273,7 +278,11 @@ pub fn export_sarif(findings: &[Finding], _program_name: &str, output_path: &str
 pub(crate) fn classify_finding_rule(finding: &Finding) -> String {
     // Native-backend rules first: several older arms below are greedy
     // (e.g. "Mismatch", "Sysvar") and would swallow the new titles.
-    if finding.title.contains("Self-Referential Validation") {
+    // "Sysvar-Introspection" MUST sit above the generic "Sysvar" arm
+    // (SAT009): the title contains the substring "Sysvar".
+    if finding.title.contains("Sysvar-Introspection") {
+        "SAT037".to_string()
+    } else if finding.title.contains("Self-Referential Validation") {
         "SAT031".to_string()
     } else if finding.title.contains("Permissionless State Creation") {
         "SAT032".to_string()

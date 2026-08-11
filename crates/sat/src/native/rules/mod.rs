@@ -9,6 +9,8 @@
 //! - `validate`  — SAT031 Self-Referential Validation (Cashio class) + SAT033 Unanchored Token Mint
 //! - `state_creation` — SAT032 Permissionless State Creation (Anchor path; the `new_bank` half of Cashio)
 //! - `oracle`    — SAT034 Stale Oracle Price / SAT035 Oracle Confidence Unvalidated / SAT036 Oracle Decimals/Exponent Mismatch
+//! - `sysvar_introspection` — SAT032 Sysvar-Introspection Misuse (Wormhole class; file-level AST scan,
+//!   shares the SAT032 SARIF id with `state_creation` — both classify via distinct title arms)
 
 pub mod auth;
 pub mod cpi;
@@ -16,6 +18,7 @@ pub mod lifecycle;
 pub mod oracle;
 pub mod pda_cei;
 pub mod state_creation;
+pub mod sysvar_introspection;
 pub mod validate;
 
 use crate::native::model::NativeProgram;
@@ -29,5 +32,6 @@ pub fn run(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Findi
     findings.extend(cpi::check(program, parsed));
     findings.extend(validate::check(program, parsed));
     findings.extend(oracle::check(program, parsed));
+    findings.extend(sysvar_introspection::check(parsed));
     findings
 }

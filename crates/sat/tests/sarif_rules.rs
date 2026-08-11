@@ -120,14 +120,14 @@ fn manual_deserialization_maps_to_sat018_error() {
 }
 
 #[test]
-fn rules_table_declares_sat001_through_sat036() {
+fn rules_table_declares_sat001_through_sat037() {
     let parsed = export_and_parse(&[]);
     let rules = parsed["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
-    assert_eq!(rules.len(), 36, "SAT001..SAT036 should all be declared");
+    assert_eq!(rules.len(), 37, "SAT001..SAT037 should all be declared");
     for id in [
         "SAT014", "SAT015", "SAT016", "SAT017", "SAT018", "SAT019", "SAT020", "SAT021", "SAT022", "SAT023", "SAT024",
         "SAT025", "SAT026", "SAT027", "SAT028", "SAT029", "SAT030", "SAT031", "SAT032", "SAT033", "SAT034", "SAT035",
-        "SAT036",
+        "SAT036", "SAT037",
     ] {
         assert!(rules.iter().any(|r| r["id"] == id), "rules table missing {id}");
     }
