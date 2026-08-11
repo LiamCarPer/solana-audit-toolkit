@@ -35,20 +35,77 @@
 //!   `load_mpl_metadata_program` exactly. Bare `load`/`load_checked` are
 //!   NEVER treated as owner checks (Mango's `TokenAccount::load_checked` /
 //!   `Loadable::load` check nothing and must keep firing SAT020).
+//! - Owner-checking free helpers `check_account_owner` /
+//!   `check_system_account` (SDI) → `owner_checked`.
 //! - State-type loads `<StateType>::load(..)`: name exactly `load` (never
 //!   `load_checked`), a receiver type segment that is not `Self`, and the
 //!   account argument classified by the frontend as `AccountKind::State` or
 //!   `AccountKind::Unchecked` → `owner_checked` + `key_checked` (the Jito/SDI
 //!   `X::load` helpers verify owner, discriminator and canonical PDA).
 //!   Token/mint/program-kind accounts are excluded so a bare `load` on a
-//!   token account still fires.
+//!   token account still fires. SDI's `Whitelist::load` / `Hopper::load` are
+//!   covered by this pattern (their accounts resolve `Unchecked`).
 //! - Authority-key helpers `check_admin` / `check_delegate_admin` /
 //!   `check_staker` / `check_authority` / `check_owner` called with a
 //!   `<account>.key` argument → `key_checked`.
+//! - Canonical-PDA derivation checkers `check_deposit_stake_authority_address`
+//!   / `check_deposit_receipt_address` (SDI) called with a `<account>.key`
+//!   argument → `key_checked`: the helpers derive the canonical PDA with
+//!   `create_program_address` and error on mismatch, pinning the key.
 //!
 //! The scan is per handler body only (no helper-body recursion): whitelisted
 //! names are trusted as the guard contract, and anything else is handled by
 //! the frontend's own reachability analysis.
+//!
+//! # SDI guard-shape extensions (2026-08 corpus round)
+//!
+//! The Stake-Deposit-Interceptor corpus (9 newly-resolved borsh enum-unpack
+//! instructions) exposed three frontend gaps that this layer closes from
+//! `auth.rs` alone (the frontend is frozen):
+//!
+//! - **`_info`-suffixed handler variables.** SDI binds `let x_info: &AccountInfo<'_> =
+//!   next_account_info(..)` while the shank `#[account(N, name = "x")]` table
+//!   names the same account `x`. All var-name matching here normalizes both
+//!   sides (strip a leading `_` and a trailing `_info`) before comparing.
+//! - **Annotated let-bindings are invisible to the frontend.** `let x: &AccountInfo<'_>`
+//!   parses as a `Pat::Type`, which the frontend's `pat_ident` does not bind,
+//!   so inline `if !x.is_signer { return Err(..) }` guards, `.key` compares
+//!   and write detection on such variables never fire. This layer re-scans
+//!   the handler's guard contexts (`if`/`while` conditions, guard macros,
+//!   match scrutinees and arm guards) for `is_signer` / `key` / `owner`
+//!   member accesses and maps them to accounts by normalized name.
+//! - **Untracked consumption patterns.** SDI's annotated bindings also break
+//!   the frontend's positional binding, so helper-call and CPI analysis that
+//!   keys on the resolved variable name misses the account entirely. This
+//!   layer re-enumerates the handler's positional bindings
+//!   (`next_account_info` chains and slice destructuring; untracked patterns
+//!   such as `split_at`/`array_refs` fall back to name matching) and runs its
+//!   CPI-passed-only classification against the *binding variable*.
+//!
+//! Additional SDI-derived suppressions (all conservative and corpus-verified):
+//! - **SAT019/SAT021 skip `Signer`-by-construction accounts** (runtime
+//!   guarantees the signature — same exemption SAT019 already had; SDI's
+//!   shank `signer` payer/user-transfer-authority accounts).
+//! - **SAT019/SAT021 skip CPI-delegated authorities**: an authority-named
+//!   account whose every use is a pass-through into an `invoke`/`invoke_signed`
+//!   accounts list, an instruction-builder argument, or an `AccountMeta`
+//!   constructor (relaxed CPI classification, any callee). The program never
+//!   reads or compares the account; access control is delegated to the callee
+//!   (SDI's `stake_pool_withdraw_authority` / `withdraw_authority` /
+//!   `user_stake_authority` pass-throughs to the SPL stake-pool CPI). This
+//!   deliberately does NOT extend SAT020, whose unknown-callee suppression is
+//!   pinned conservative by `cpi_to_unknown_program_is_reported`.
+//! - **SAT020 skips unreferenced accounts**: an account the handler never
+//!   mentions (only its `next_account_info` binding exists) has no attack
+//!   surface in the instruction (SDI's unused `associated_token_program`).
+//! - **SAT019/SAT021 skip init-time authority records**: an authority-named
+//!   account whose every use is an assignment RHS (`state.field = *acct.key`)
+//!   into state deserialized from an account this handler freshly creates or
+//!   empty-checks (`create_*` / `check_system_account` / `load_system_account`)
+//!   is an init-time set by the creator — the value is data, not access
+//!   control (SDI's `authority` recorded during `Init...`). Push-transfer
+//!   records into *existing* state (Jito's `new_admin`/`new_owner`) keep
+//!   firing — they are the intentionally-kept hardening family.
 //!
 //! Title prefixes are load-bearing for SARIF classification (section 7);
 //! do not rename them.
@@ -81,6 +138,48 @@ const SIGNER_HELPERS: [&str; 4] = ["load_signer", "require_signer", "check_signe
 /// compare the argument key to a stored authority key.
 const AUTHORITY_KEY_HELPERS: [&str; 5] =
     ["check_admin", "check_delegate_admin", "check_staker", "check_authority", "check_owner"];
+
+/// Canonical-PDA derivation checkers (SDI, pattern 4b): the account `.key`
+/// argument is compared against `create_program_address`/`find_program_address`
+/// seeds — `check_deposit_stake_authority_address` and
+/// `check_deposit_receipt_address` derive the canonical PDA and error on
+/// mismatch, pinning the account's key exactly like a `<StateType>::load`.
+const PDA_KEY_HELPERS: [&str; 2] = ["check_deposit_stake_authority_address", "check_deposit_receipt_address"];
+
+/// Owner-checking free helpers (SDI, pattern 2b): `check_account_owner` errors
+/// on `*program_id != *account_info.owner`; `check_system_account` additionally
+/// requires a system-owned, empty (uninitialized) account. Both pin the
+/// account's owner.
+const OWNER_CHECK_HELPERS: [&str; 2] = ["check_account_owner", "check_system_account"];
+
+/// Account-creation / uninitialized-account helpers (pattern 5): their account
+/// arguments are freshly created (or empty-checked) state within the handler,
+/// so authority values recorded into them are init-time sets by the creator —
+/// not access-control uses.
+const FRESH_STATE_HELPERS: [&str; 6] = [
+    "check_system_account",
+    "load_system_account",
+    "create_pda_account",
+    "create_account",
+    "create_associated_token_account",
+    "create_associated_token_account_idempotent",
+];
+
+/// Guard macros whose arguments are guard contexts (mirrors the frontend's
+/// `is_guard_macro` list).
+const GUARD_MACROS: [&str; 11] = [
+    "require",
+    "require_keys_eq",
+    "require_keys_neq",
+    "require_eq",
+    "assert",
+    "assert_eq",
+    "invariant",
+    "debug_assert",
+    "debug_assert_eq",
+    "check",
+    "check_eq",
+];
 
 /// Program-kind words (pattern 2): a `load_*` helper whose name contains one
 /// of these verifies `owner == expected program`.
@@ -231,7 +330,8 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
     let mut findings = Vec::new();
     for ix in &program.instructions {
         // Handler-body helper guards (whitelisted names only, see module docs).
-        let guards = scanner.guard_set(ix);
+        let bindings = handler_binding_vars(&scanner.index, ix);
+        let guards = scanner.guard_set(ix, &bindings);
         for account in &ix.accounts {
             let authority_named = is_authority_named(&account.name);
             let stateful = matches!(account.kind, AccountKind::State | AccountKind::TokenAccount | AccountKind::Mint);
@@ -239,28 +339,44 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
             let signer_ok = account.is_signer_checked || guards.signer.contains(&account.name);
             let owner_ok = account.owner_checked || guards.owner.contains(&account.name);
             let key_ok = account.key_checked || guards.key.contains(&account.name);
+            let recorded_ok = guards.recorded.contains(&account.name);
 
             // SAT019: authority-named, signature never verified, not a
-            // `Signer` by construction, key not pinned.
-            if authority_named && !signer_ok && account.kind != AccountKind::Signer && !key_ok {
+            // `Signer` by construction, key not pinned, not an init-time
+            // record into fresh state, and not delegated to a CPI callee.
+            if authority_named
+                && !signer_ok
+                && account.kind != AccountKind::Signer
+                && !key_ok
+                && !recorded_ok
+                && !classifier.is_cpi_passed_any(ix, account, &bindings)
+            {
                 findings.push(sat019(ix, account));
             }
 
             // SAT020: stateful or written account, owner never verified, key
-            // not pinned, not a runtime builtin, and not CPI-passed-only to a
-            // known validating builtin.
+            // not pinned, not a runtime builtin, not CPI-passed-only to a
+            // known validating builtin, and referenced by the program at all.
             if !is_builtin(account.kind)
                 && (stateful || account.written)
                 && !owner_ok
                 && !key_ok
-                && !classifier.is_cpi_passed_only(ix, account)
+                && !classifier.is_cpi_passed_only(ix, account, &bindings)
+                && !classifier.is_unreferenced(ix, account, &bindings)
             {
                 findings.push(sat020(ix, account));
             }
 
             // SAT021: authority-named, key never compared, signature never
-            // verified.
-            if authority_named && !key_ok && !signer_ok {
+            // verified (Signer-by-construction accounts have their signature
+            // guaranteed by the runtime).
+            if authority_named
+                && !key_ok
+                && !signer_ok
+                && account.kind != AccountKind::Signer
+                && !recorded_ok
+                && !classifier.is_cpi_passed_any(ix, account, &bindings)
+            {
                 findings.push(sat021(ix, account));
             }
         }
@@ -283,6 +399,38 @@ struct GuardSet {
     /// Accounts passed to a whitelisted authority-key helper with a `.key`
     /// argument, or to a state-type `<StateType>::load`.
     key: HashSet<String>,
+    /// Authority-named accounts recorded into freshly-created state
+    /// (`state.field = *acct.key` assignment RHS only): init-time sets.
+    recorded: HashSet<String>,
+}
+
+/// Normalized form of an identifier for account-variable matching: strips a
+/// leading `_` and a trailing `_info` (SDI's `authority_info` ↔ shank
+/// `authority` handler convention).
+fn var_key(name: &str) -> &str {
+    name.strip_prefix('_').unwrap_or(name).strip_suffix("_info").unwrap_or(name)
+}
+
+/// True when an expression identifier refers to the resolved account `name`.
+fn ident_matches(ident: &str, name: &str) -> bool {
+    var_key(ident) == var_key(name)
+}
+
+/// The bare variable an expression peels to (`acct`, `&acct`, `(acct)`).
+fn bare_var(e: &syn::Expr) -> Option<String> {
+    match peel(e) {
+        syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+        _ => None,
+    }
+}
+
+/// The account variable of a `<var>.key` argument (wrappers allowed):
+/// `old_admin.key`, `&old_admin.key`.
+fn key_var(e: &syn::Expr) -> Option<String> {
+    match peel(e) {
+        syn::Expr::Field(f) if member_name(&f.member) == "key" => bare_var(&f.base),
+        _ => None,
+    }
 }
 
 /// Scans handler bodies for whitelisted guard-helper calls.
@@ -291,25 +439,55 @@ struct HelperGuardScanner {
 }
 
 impl HelperGuardScanner {
-    /// The bare variable an expression peels to (`acct`, `&acct`, `(acct)`).
-    fn bare_var(e: &syn::Expr) -> Option<String> {
-        match peel(e) {
-            syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
-            _ => None,
+    /// Insert every resolved account that `var` could refer to (normalized
+    /// `_info`-suffix matching), keyed by the canonical account name.
+    fn insert_matching(&self, out: &mut HashSet<String>, var: &str, names: &HashSet<&str>) {
+        for n in names {
+            if ident_matches(var, n) {
+                out.insert(n.to_string());
+            }
         }
     }
 
-    /// The account variable of a `<var>.key` argument (wrappers allowed):
-    /// `old_admin.key`, `&old_admin.key`.
-    fn key_var(e: &syn::Expr) -> Option<String> {
-        match peel(e) {
-            syn::Expr::Field(f) if member_name(&f.member) == "key" => Self::bare_var(&f.base),
-            _ => None,
+    /// Attribute a guard hit for the handler variable `var` to the resolved
+    /// account: positionally via the handler's binding enumeration first
+    /// (bridges shank names that differ from the handler variable beyond the
+    /// `_info` suffix, e.g. SDI's `deposit_stake_authority_info` ↔ shank
+    /// `deposit_authority`), then by normalized name.
+    fn attribute(
+        &self,
+        out: &mut HashSet<String>,
+        var: &str,
+        var_index: &HashMap<String, usize>,
+        accounts: &[ResolvedAccount],
+        names: &HashSet<&str>,
+    ) {
+        if let Some(&idx) = var_index.get(var)
+            && let Some(account) = accounts.get(idx)
+        {
+            out.insert(account.name.clone());
+            return;
         }
+        self.insert_matching(out, var, names);
+    }
+
+    /// Kind of the resolved account `var` refers to (positional first, then
+    /// normalized name).
+    fn kind_of<'a>(
+        &self,
+        var: &str,
+        var_index: &HashMap<String, usize>,
+        accounts: &'a [ResolvedAccount],
+        kinds: &HashMap<&'a str, AccountKind>,
+    ) -> Option<AccountKind> {
+        if let Some(&idx) = var_index.get(var) {
+            return accounts.get(idx).map(|a| a.kind);
+        }
+        kinds.iter().find(|(n, _)| ident_matches(var, n)).map(|(_, k)| *k)
     }
 
     /// Guard sets for one instruction, from its handler body.
-    fn guard_set(&self, ix: &NativeInstruction) -> GuardSet {
+    fn guard_set(&self, ix: &NativeInstruction, bindings: &Option<Vec<Option<String>>>) -> GuardSet {
         let mut out = GuardSet::default();
         let Some(handler) = self.index.lookup(&ix.handler, &ix.file) else {
             return out;
@@ -317,6 +495,11 @@ impl HelperGuardScanner {
         // Name → frontend kind, for the pattern-3 State/Unchecked gate.
         let kinds: HashMap<&str, AccountKind> = ix.accounts.iter().map(|a| (a.name.as_str(), a.kind)).collect();
         let names: HashSet<&str> = ix.accounts.iter().map(|a| a.name.as_str()).collect();
+        // Handler variable → account index (positional binding enumeration).
+        let var_index: HashMap<String, usize> = bindings
+            .as_ref()
+            .map(|b| b.iter().enumerate().filter_map(|(idx, v)| v.as_deref().map(|v| (v.to_string(), idx))).collect())
+            .unwrap_or_default();
 
         let mut signer = HashSet::new();
         let mut owner = HashSet::new();
@@ -326,63 +509,458 @@ impl HelperGuardScanner {
                 let Some(callee) = path_key(&c.func) else { return };
                 let segments: Vec<&str> = callee.split("::").collect();
                 let last = segments.last().copied().unwrap_or("");
-                let account_args = |out: &mut HashSet<String>| {
+                if SIGNER_HELPERS.contains(&last) {
                     for arg in &c.args {
-                        if let Some(v) = Self::bare_var(arg)
-                            && names.contains(v.as_str())
-                        {
-                            out.insert(v);
+                        if let Some(v) = bare_var(arg) {
+                            self.attribute(&mut signer, &v, &var_index, &ix.accounts, &names);
                         }
                     }
-                };
-                if SIGNER_HELPERS.contains(&last) {
-                    account_args(&mut signer);
                 }
-                if is_owner_loader(last) {
-                    account_args(&mut owner);
+                if OWNER_CHECK_HELPERS.contains(&last) || is_owner_loader(last) {
+                    for arg in &c.args {
+                        if let Some(v) = bare_var(arg) {
+                            self.attribute(&mut owner, &v, &var_index, &ix.accounts, &names);
+                        }
+                    }
                 }
                 // `<StateType>::load`: exact name `load` (never `load_checked`),
                 // a receiver type segment that is not `Self`, and an account
                 // classified `State`/`Unchecked` by the frontend.
                 if segments.len() >= 2 && last == "load" && segments[segments.len() - 2] != "Self" {
                     for arg in &c.args {
-                        if let Some(v) = Self::bare_var(arg)
-                            && matches!(kinds.get(v.as_str()), Some(AccountKind::State | AccountKind::Unchecked))
+                        if let Some(v) = bare_var(arg)
+                            && matches!(
+                                self.kind_of(&v, &var_index, &ix.accounts, &kinds),
+                                Some(AccountKind::State | AccountKind::Unchecked)
+                            )
                         {
-                            owner.insert(v.clone());
-                            key.insert(v);
+                            self.attribute(&mut owner, &v, &var_index, &ix.accounts, &names);
+                            self.attribute(&mut key, &v, &var_index, &ix.accounts, &names);
                         }
                     }
                 }
-                if AUTHORITY_KEY_HELPERS.contains(&last) {
+                if AUTHORITY_KEY_HELPERS.contains(&last) || PDA_KEY_HELPERS.contains(&last) {
                     for arg in &c.args {
-                        if let Some(v) = Self::key_var(arg)
-                            && names.contains(v.as_str())
-                        {
-                            key.insert(v);
+                        if let Some(v) = key_var(arg) {
+                            self.attribute(&mut key, &v, &var_index, &ix.accounts, &names);
                         }
                     }
                 }
             }
             syn::Expr::MethodCall(m) => {
                 let method = m.method.to_string();
-                if AUTHORITY_KEY_HELPERS.contains(&method.as_str()) {
+                if AUTHORITY_KEY_HELPERS.contains(&method.as_str()) || PDA_KEY_HELPERS.contains(&method.as_str()) {
                     for arg in &m.args {
-                        if let Some(v) = Self::key_var(arg)
-                            && names.contains(v.as_str())
-                        {
-                            key.insert(v);
+                        if let Some(v) = key_var(arg) {
+                            self.attribute(&mut key, &v, &var_index, &ix.accounts, &names);
                         }
                     }
                 }
             }
             _ => {}
         });
+
+        // Inline guard-context member accesses (`if !x.is_signer { .. }`,
+        // `if derived != *x.key { .. }`, require!-style macros): mirrors the
+        // frontend's guard-cond scan. The frontend misses SDI's annotated
+        // `let x: &AccountInfo<'_>` bindings, so this layer re-scans names.
+        for (member, var) in guard_member_accesses(&handler.block) {
+            match member.as_str() {
+                "is_signer" => self.attribute(&mut signer, &var, &var_index, &ix.accounts, &names),
+                "key" => self.attribute(&mut key, &var, &var_index, &ix.accounts, &names),
+                "owner" => self.attribute(&mut owner, &var, &var_index, &ix.accounts, &names),
+                _ => {}
+            }
+        }
+
+        // Init-time authority records: recorded-only into freshly-created
+        // state (SDI's `authority` during `Init..`); keyed canonically.
+        for var in init_recorded_accounts(&handler.block) {
+            self.attribute(&mut out.recorded, &var, &var_index, &ix.accounts, &names);
+        }
+
         out.signer = signer;
         out.owner = owner;
         out.key = key;
         out
     }
+}
+
+/// Member accesses (`x.is_signer`, `x.key`, `x.owner`) inside guard contexts
+/// (if/while conditions, guard macros, match scrutinees and arm guards), as
+/// `(member, base-variable)` pairs.
+fn guard_member_accesses(block: &syn::Block) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    guard_block(block, &mut out);
+    out
+}
+
+/// Collect guard-context member accesses over a block's statements.
+fn guard_block(block: &syn::Block, out: &mut Vec<(String, String)>) {
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Expr(e, _) => guard_stmt_expr(e, out),
+            syn::Stmt::Local(l) => {
+                if let Some(init) = &l.init {
+                    guard_stmt_expr(&init.expr, out);
+                }
+            }
+            syn::Stmt::Macro(m) => {
+                let last = m.mac.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
+                if GUARD_MACROS.contains(&last.as_str()) {
+                    for arg in macro_exprs(&m.mac) {
+                        cond_member_accesses(&arg, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Walk a statement-position expression, descending into guard constructs.
+fn guard_stmt_expr(e: &syn::Expr, out: &mut Vec<(String, String)>) {
+    match e {
+        syn::Expr::If(i) => {
+            cond_member_accesses(&i.cond, out);
+            guard_block(&i.then_branch, out);
+            if let Some((_, else_expr)) = &i.else_branch {
+                guard_stmt_expr(else_expr, out);
+            }
+        }
+        syn::Expr::While(w) => {
+            cond_member_accesses(&w.cond, out);
+            guard_block(&w.body, out);
+        }
+        syn::Expr::Match(m) => {
+            cond_member_accesses(&m.expr, out);
+            for arm in &m.arms {
+                if let Some((_, guard)) = &arm.guard {
+                    cond_member_accesses(guard, out);
+                }
+                guard_stmt_expr(&arm.body, out);
+            }
+        }
+        syn::Expr::Block(b) => guard_block(&b.block, out),
+        syn::Expr::Unsafe(u) => guard_block(&u.block, out),
+        syn::Expr::Async(a) => guard_block(&a.block, out),
+        syn::Expr::Const(c) => guard_block(&c.block, out),
+        syn::Expr::TryBlock(tb) => guard_block(&tb.block, out),
+        syn::Expr::Loop(l) => guard_block(&l.body, out),
+        syn::Expr::ForLoop(fl) => guard_block(&fl.body, out),
+        syn::Expr::Try(t) => guard_stmt_expr(&t.expr, out),
+        syn::Expr::Paren(p) => guard_stmt_expr(&p.expr, out),
+        syn::Expr::Group(g) => guard_stmt_expr(&g.expr, out),
+        syn::Expr::Return(r) => {
+            if let Some(x) = &r.expr {
+                guard_stmt_expr(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Member accesses on bare variables inside one guard-condition expression.
+fn cond_member_accesses(e: &syn::Expr, out: &mut Vec<(String, String)>) {
+    match e {
+        syn::Expr::Field(f) => {
+            if matches!(member_name(&f.member).as_str(), "is_signer" | "key" | "owner")
+                && let syn::Expr::Path(p) = peel(&f.base)
+                && let Some(ident) = p.path.get_ident()
+            {
+                out.push((member_name(&f.member), ident.to_string()));
+            }
+            cond_member_accesses(&f.base, out);
+        }
+        syn::Expr::MethodCall(m) if m.method == "key_eq" => {
+            if let syn::Expr::Path(p) = peel(&m.receiver)
+                && let Some(ident) = p.path.get_ident()
+            {
+                out.push(("key".to_string(), ident.to_string()));
+            }
+        }
+        syn::Expr::Unary(u) => cond_member_accesses(&u.expr, out),
+        syn::Expr::Paren(p) => cond_member_accesses(&p.expr, out),
+        syn::Expr::Group(g) => cond_member_accesses(&g.expr, out),
+        syn::Expr::Reference(r) => cond_member_accesses(&r.expr, out),
+        syn::Expr::Try(t) => cond_member_accesses(&t.expr, out),
+        syn::Expr::Let(l) => cond_member_accesses(&l.expr, out),
+        syn::Expr::Binary(b) => {
+            cond_member_accesses(&b.left, out);
+            cond_member_accesses(&b.right, out);
+        }
+        syn::Expr::Call(c) => {
+            for arg in &c.args {
+                cond_member_accesses(arg, out);
+            }
+        }
+        syn::Expr::MethodCall(m) => {
+            cond_member_accesses(&m.receiver, out);
+            for arg in &m.args {
+                cond_member_accesses(arg, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Accounts whose every use is an assignment RHS (`state.field = *acct.key`)
+/// into state deserialized from an account this handler freshly creates or
+/// empty-checks (`FRESH_STATE_HELPERS`): init-time authority records, keyed by
+/// the handler's variable name.
+fn init_recorded_accounts(block: &syn::Block) -> HashSet<String> {
+    let bindings = top_level_bindings(block);
+
+    // Freshly-created / empty-checked account variables.
+    let mut fresh: HashSet<String> = HashSet::new();
+    walk_all(block, &mut |e| {
+        if let syn::Expr::Call(c) = e
+            && let Some(callee) = path_key(&c.func)
+            && let Some(last) = callee.rsplit("::").next()
+            && FRESH_STATE_HELPERS.contains(&last)
+        {
+            for arg in &c.args {
+                if let Some(v) = bare_var(arg) {
+                    fresh.insert(v);
+                }
+            }
+        }
+    });
+
+    // `data = acct.try_borrow[_mut]_data()` / `data = acct.data.borrow[_mut]()`
+    // → data variable → source account variable.
+    let mut data_source: HashMap<String, String> = HashMap::new();
+    for (var, rhs) in &bindings {
+        if let Some(acct) = data_source_acct(rhs) {
+            data_source.insert(var.clone(), acct);
+        }
+    }
+    // `local = Type::try_from_slice[_unchecked][_mut](&mut data | &data)` →
+    // local variable → source account variable (through the data variable).
+    let mut local_source: HashMap<String, String> = HashMap::new();
+    for (var, rhs) in &bindings {
+        if let Some(data_var) = deserialize_data_var(rhs)
+            && let Some(acct) = data_source.get(&data_var)
+        {
+            local_source.insert(var.clone(), acct.clone());
+        }
+    }
+    let source_of =
+        |var: &str| -> Option<String> { local_source.get(var).cloned().or_else(|| data_source.get(var).cloned()) };
+
+    // Every identifier mention, and every assignment-RHS identifier mention.
+    let mut all_idents: Vec<String> = Vec::new();
+    walk_all(block, &mut |e| {
+        if let syn::Expr::Path(p) = e
+            && let Some(ident) = p.path.get_ident()
+        {
+            all_idents.push(ident.to_string());
+        }
+    });
+    let mut rhs_idents: Vec<String> = Vec::new();
+    walk_all(block, &mut |e| {
+        if let syn::Expr::Assign(a) = e {
+            collect_idents_in_expr(&a.right, &mut rhs_idents);
+        }
+    });
+
+    // `state.field = *acct.key` assignments whose state resolves to a fresh
+    // account: the account is recorded, not enforced.
+    let mut recorded: HashSet<String> = HashSet::new();
+    walk_all(block, &mut |e| {
+        if let syn::Expr::Assign(a) = e
+            && let Some(var) = key_base_var(&a.right)
+            && let syn::Expr::Field(f) = peel(&a.left)
+            && let syn::Expr::Path(p) = peel(&f.base)
+            && let Some(local) = p.path.get_ident()
+            && let Some(src) = source_of(&local.to_string())
+            && fresh.contains(&src)
+            && all_idents.iter().filter(|i| *i == &var).count() == rhs_idents.iter().filter(|i| *i == &var).count()
+        {
+            recorded.insert(var);
+        }
+    });
+    recorded
+}
+
+/// `acct.try_borrow[_mut]_data()` / `acct.data.borrow[_mut]()`: the source
+/// account variable of a data-binding.
+fn data_source_acct(rhs: &syn::Expr) -> Option<String> {
+    match peel(rhs) {
+        syn::Expr::MethodCall(m) if m.method.to_string().starts_with("try_borrow") => bare_var(&m.receiver),
+        syn::Expr::MethodCall(m) if matches!(m.method.to_string().as_str(), "borrow" | "borrow_mut") => {
+            match peel(&m.receiver) {
+                syn::Expr::Field(f) if member_name(&f.member) == "data" => bare_var(&f.base),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The data variable of a `Type::try_from_slice[_unchecked][_mut](&data)`
+/// call, with `.unwrap()`/`.expect()` wrappers peeled.
+fn deserialize_data_var(rhs: &syn::Expr) -> Option<String> {
+    let mut e = rhs;
+    e = match peel(e) {
+        syn::Expr::MethodCall(m) if matches!(m.method.to_string().as_str(), "unwrap" | "expect") => &m.receiver,
+        other => other,
+    };
+    match peel(e) {
+        syn::Expr::Call(c) => {
+            let last = path_key(&c.func).and_then(|k| k.rsplit("::").next().map(|s| s.to_string()))?;
+            if !(last.starts_with("try_from_slice") || last.starts_with("from_slice")) {
+                return None;
+            }
+            c.args.first().and_then(bare_var)
+        }
+        _ => None,
+    }
+}
+
+/// The account variable of an assignment RHS that peels to `*acct.key` /
+/// `acct.key` (deref/ref wrappers allowed).
+fn key_base_var(rhs: &syn::Expr) -> Option<String> {
+    match peel(rhs) {
+        syn::Expr::Field(f) if member_name(&f.member) == "key" => bare_var(&f.base),
+        _ => None,
+    }
+}
+
+/// Collect every path identifier of an expression into `out`.
+fn collect_idents_in_expr(e: &syn::Expr, out: &mut Vec<String>) {
+    if let syn::Expr::Path(p) = e
+        && let Some(ident) = p.path.get_ident()
+    {
+        out.push(ident.to_string());
+    }
+    match e {
+        syn::Expr::Call(c) => {
+            for arg in &c.args {
+                collect_idents_in_expr(arg, out);
+            }
+        }
+        syn::Expr::MethodCall(m) => {
+            collect_idents_in_expr(&m.receiver, out);
+            for arg in &m.args {
+                collect_idents_in_expr(arg, out);
+            }
+        }
+        syn::Expr::Field(f) => collect_idents_in_expr(&f.base, out),
+        syn::Expr::Unary(u) => collect_idents_in_expr(&u.expr, out),
+        syn::Expr::Reference(r) => collect_idents_in_expr(&r.expr, out),
+        syn::Expr::Paren(p) => collect_idents_in_expr(&p.expr, out),
+        syn::Expr::Group(g) => collect_idents_in_expr(&g.expr, out),
+        syn::Expr::Try(t) => collect_idents_in_expr(&t.expr, out),
+        syn::Expr::Binary(b) => {
+            collect_idents_in_expr(&b.left, out);
+            collect_idents_in_expr(&b.right, out);
+        }
+        syn::Expr::Index(i) => {
+            collect_idents_in_expr(&i.expr, out);
+            collect_idents_in_expr(&i.index, out);
+        }
+        syn::Expr::Array(a) => {
+            for el in &a.elems {
+                collect_idents_in_expr(el, out);
+            }
+        }
+        syn::Expr::Tuple(t) => {
+            for el in &t.elems {
+                collect_idents_in_expr(el, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Positional handler bindings ─────────────────────────────────────────────
+//
+// SDI's `let x: &AccountInfo<'_> = next_account_info(..)` annotated bindings
+// parse as `Pat::Type`, which the frozen frontend's `pat_ident` does not bind —
+// so every guard/CPI analysis that keys on the resolved variable name misses
+// those accounts entirely. This layer re-enumerates the handler's positional
+// bindings from source and runs the CPI classification against the *binding
+// variable* instead of the (possibly shank-renamed) account name.
+
+/// True when the initializer consumes one positional account.
+fn is_consumption(init: &syn::Expr) -> bool {
+    let mut e = init;
+    loop {
+        match peel(e) {
+            syn::Expr::MethodCall(m)
+                if matches!(m.method.to_string().as_str(), "ok" | "ok_or" | "ok_or_else" | "unwrap" | "expect") =>
+            {
+                e = &m.receiver;
+            }
+            syn::Expr::Call(c) => return path_key(&c.func).as_deref() == Some("next_account_info"),
+            syn::Expr::MethodCall(m) if m.method == "next" => return true,
+            _ => return false,
+        }
+    }
+}
+
+/// The variable name of a binding pattern (peels `Pat::Type` annotations).
+fn pat_ident_peel(pat: &syn::Pat) -> Option<String> {
+    match pat {
+        syn::Pat::Ident(i) => Some(i.ident.to_string()),
+        syn::Pat::Type(t) => pat_ident_peel(&t.pat),
+        syn::Pat::Wild(_) => Some("_".to_string()),
+        _ => None,
+    }
+}
+
+/// Positional binding variables of a `let [a, b, ..] = accounts` destructure.
+fn slice_binding_vars(pat: &syn::Pat) -> Option<Vec<Option<String>>> {
+    let syn::Pat::Slice(ps) = pat else { return None };
+    let mut out = Vec::new();
+    for elem in &ps.elems {
+        match elem {
+            syn::Pat::Ident(_) | syn::Pat::Type(_) | syn::Pat::Wild(_) => out.push(pat_ident_peel(elem)),
+            syn::Pat::Rest(_) => break,
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Binding variable per account index for the instruction's handler. `None`
+/// when the handler uses consumption patterns the enumeration does not track
+/// (`split_at`, `array_refs`, iterator `.next()` loops), which makes the
+/// positional mapping unreliable.
+fn handler_binding_vars(index: &FnIndex, ix: &NativeInstruction) -> Option<Vec<Option<String>>> {
+    let handler = index.lookup(&ix.handler, &ix.file)?;
+    let block = &handler.block;
+    // Untracked consumption patterns make the positional mapping unreliable.
+    let mut tracked = true;
+    walk_all(block, &mut |e| match e {
+        syn::Expr::MethodCall(m) if matches!(m.method.to_string().as_str(), "split_at" | "next") => {
+            tracked = false;
+        }
+        syn::Expr::Macro(mac) if mac.mac.path.segments.last().is_some_and(|s| s.ident == "array_refs") => {
+            tracked = false;
+        }
+        _ => {}
+    });
+    if !tracked {
+        return None;
+    }
+    let mut out: Vec<Option<String>> = Vec::new();
+    for stmt in &block.stmts {
+        if let syn::Stmt::Local(l) = stmt
+            && let Some(init) = l.init.as_ref().map(|i| i.expr.as_ref())
+        {
+            if is_consumption(init) {
+                out.push(pat_ident_peel(&l.pat));
+            } else if let Some(vars) = slice_binding_vars(&l.pat)
+                && let Some(init) = l.init.as_ref().map(|i| i.expr.as_ref())
+                && matches!(peel(init), syn::Expr::Path(_) | syn::Expr::Reference(_) | syn::Expr::Index(_))
+            {
+                out.extend(vars);
+            }
+        }
+    }
+    Some(out)
 }
 
 // ── SAT020 CPI-passed-only suppression ───────────────────────────────────────
@@ -695,6 +1273,7 @@ fn walk_expr_all(e: &syn::Expr, f: &mut dyn FnMut(&syn::Expr)) {
             }
         }
         syn::Expr::Let(l) => walk_expr_all(&l.expr, f),
+        syn::Expr::Field(fl) => walk_expr_all(&fl.base, f),
         syn::Expr::Binary(b) => {
             walk_expr_all(&b.left, f);
             walk_expr_all(&b.right, f);
@@ -823,10 +1402,12 @@ fn push_fn(by_name: &mut HashMap<String, Vec<Rc<FnDef>>>, sig: syn::Signature, b
 // ── The classifier ───────────────────────────────────────────────────────────
 
 /// Classifies how a resolved account is used inside its instruction's handler
-/// call graph, to decide SAT020's CPI-passed-only suppression.
+/// call graph, to decide the CPI-passed-only suppressions (SAT020 strict —
+/// known validating builtins only; SAT019/SAT021 relaxed — any callee, for
+/// CPI-delegated authorities).
 struct CpiClassifier {
     index: Rc<FnIndex>,
-    memo: HashMap<(String, String), UseClass>,
+    memo: HashMap<(String, String, bool), UseClass>,
     computing: HashSet<(String, String)>,
 }
 
@@ -840,6 +1421,9 @@ struct Walk<'a> {
     known_arrays: &'a HashSet<String>,
     key_checks: &'a HashMap<String, KnownProgram>,
     struct_vars: &'a HashSet<String>,
+    /// Relaxed mode (SAT019/SAT021): every CPI construction context counts as
+    /// a pass-through regardless of the callee's known-ness.
+    relaxed: bool,
     /// Set when any usage of the account was found (even benign ones).
     seen: &'a mut bool,
     state: &'a mut UseClass,
@@ -850,55 +1434,113 @@ impl CpiClassifier {
         CpiClassifier { index, memo: HashMap::new(), computing: HashSet::new() }
     }
 
+    /// The variable to classify an account under: the handler's positional
+    /// binding variable when the enumeration is reliable (SDI's annotated
+    /// `_info` bindings), else the resolved account name.
+    fn classify_var(&self, account: &ResolvedAccount, bindings: &Option<Vec<Option<String>>>) -> String {
+        bindings
+            .as_ref()
+            .and_then(|b| b.get(account.index))
+            .and_then(|b| b.as_deref())
+            .unwrap_or(account.name.as_str())
+            .to_string()
+    }
+
     /// True when every use of `account` in `ix` is a pass-through to a CPI
     /// against a known validating builtin and the program never touches its
     /// data. Any unclassifiable use yields `false` (the finding fires).
-    fn is_cpi_passed_only(&mut self, ix: &NativeInstruction, account: &ResolvedAccount) -> bool {
+    fn is_cpi_passed_only(
+        &mut self,
+        ix: &NativeInstruction,
+        account: &ResolvedAccount,
+        bindings: &Option<Vec<Option<String>>>,
+    ) -> bool {
         let Some(handler) = self.index.lookup(&ix.handler, &ix.file) else { return false };
-        self.classify(&handler, &account.name, 0) == UseClass::CpiPassed
+        let var = self.classify_var(account, bindings);
+        self.classify(&handler, &var, 0, false) == UseClass::CpiPassed
     }
 
-    fn classify(&mut self, def: &FnDef, var: &str, depth: usize) -> UseClass {
-        let key = (def.key.clone(), var.to_string());
-        if self.computing.contains(&key) {
+    /// True when every use of `account` is inside CPI construction
+    /// (invoke/invoke_signed accounts, instruction-builder arguments,
+    /// `AccountMeta` constructors) for *any* callee — the account is delegated
+    /// to the CPI target, never read or compared by this program. Used for the
+    /// SAT019/SAT021 authority suppressions.
+    fn is_cpi_passed_any(
+        &mut self,
+        ix: &NativeInstruction,
+        account: &ResolvedAccount,
+        bindings: &Option<Vec<Option<String>>>,
+    ) -> bool {
+        let Some(handler) = self.index.lookup(&ix.handler, &ix.file) else { return false };
+        let var = self.classify_var(account, bindings);
+        self.classify(&handler, &var, 0, true) == UseClass::CpiPassed
+    }
+
+    /// True when the account's binding variable never appears in the handler
+    /// or its helper call graph (depth ≤ 2): the program neither reads, nor
+    /// writes, nor CPI-passes the account — no attack surface in this
+    /// instruction (SAT020 skip).
+    fn is_unreferenced(
+        &mut self,
+        ix: &NativeInstruction,
+        account: &ResolvedAccount,
+        bindings: &Option<Vec<Option<String>>>,
+    ) -> bool {
+        let Some(handler) = self.index.lookup(&ix.handler, &ix.file) else { return false };
+        let Some(var) = bindings.as_ref().and_then(|b| b.get(account.index)).and_then(|b| b.as_deref()) else {
+            return false;
+        };
+        let mut idents = HashSet::new();
+        let mut visited = HashSet::new();
+        collect_handler_idents(&handler.block, &self.index, &ix.file, 0, &mut visited, &mut idents);
+        !idents.contains(var)
+    }
+
+    fn classify(&mut self, def: &FnDef, var: &str, depth: usize, relaxed: bool) -> UseClass {
+        let key = (def.key.clone(), var.to_string(), relaxed);
+        if self.computing.contains(&(def.key.clone(), var.to_string())) {
             // Call graph cycle: cannot see the full use — conservative.
             return UseClass::Used;
         }
         if let Some(class) = self.memo.get(&key) {
             return *class;
         }
-        self.computing.insert(key.clone());
-        let class = self.classify_inner(def, var, depth);
-        self.computing.remove(&key);
+        self.computing.insert((def.key.clone(), var.to_string()));
+        let class = self.classify_inner(def, var, depth, relaxed);
+        self.computing.remove(&(def.key.clone(), var.to_string()));
         self.memo.insert(key, class);
         class
     }
 
-    fn classify_inner(&mut self, def: &FnDef, var: &str, depth: usize) -> UseClass {
+    fn classify_inner(&mut self, def: &FnDef, var: &str, depth: usize, relaxed: bool) -> UseClass {
         let bindings = top_level_bindings(&def.block);
         let struct_vars = struct_vars_of(&bindings);
         let key_checks = self.known_key_checks(def, &bindings);
 
         // Pre-scan every invoke site: a known callee makes its accounts
-        // CPI-passed; an unknown callee marks them as program uses.
+        // CPI-passed; an unknown callee marks them as program uses. The
+        // relaxed mode (SAT019/SAT021) skips the unknown-callee marking —
+        // any-callee CPI construction is a pass-through there.
         let mut known_arrays: HashSet<String> = HashSet::new();
         let mut unknown_vars: HashSet<String> = HashSet::new();
-        for (prog, accounts) in invoke_sites(&def.block) {
-            let known = self.known_program(&prog, &bindings, &key_checks, 0);
-            match accounts_of(&accounts, &bindings, 0) {
-                AccountsOf::Inline(names) => {
-                    if known.is_none() {
-                        unknown_vars.extend(names);
+        if !relaxed {
+            for (prog, accounts) in invoke_sites(&def.block) {
+                let known = self.known_program(&prog, &bindings, &key_checks, 0);
+                match accounts_of(&accounts, &bindings, 0) {
+                    AccountsOf::Inline(names) => {
+                        if known.is_none() {
+                            unknown_vars.extend(names);
+                        }
                     }
-                }
-                AccountsOf::BoundArray(name, names) => {
-                    if known.is_some() {
-                        known_arrays.insert(name);
-                    } else {
-                        unknown_vars.extend(names);
+                    AccountsOf::BoundArray(name, names) => {
+                        if known.is_some() {
+                            known_arrays.insert(name);
+                        } else {
+                            unknown_vars.extend(names);
+                        }
                     }
+                    AccountsOf::Unresolved => {}
                 }
-                AccountsOf::Unresolved => {}
             }
         }
         if unknown_vars.contains(var) {
@@ -916,6 +1558,7 @@ impl CpiClassifier {
             known_arrays: &known_arrays,
             key_checks: &key_checks,
             struct_vars: &struct_vars,
+            relaxed,
             seen: &mut seen,
             state: &mut state,
         };
@@ -1107,7 +1750,10 @@ impl CpiClassifier {
                         *walk.state = UseClass::Used;
                     }
                 }
-                self.walk_expr(&m.receiver, ctx, walk);
+                // The clone receiver is a pass-through even in normal code
+                // (relaxed mode: vec!-built CPI account lists).
+                let rctx = if walk.relaxed && m.method == "clone" { Ctx::CpiArg } else { ctx };
+                self.walk_expr(&m.receiver, rctx, walk);
                 for arg in &m.args {
                     self.walk_expr(arg, ctx, walk);
                 }
@@ -1230,10 +1876,11 @@ impl CpiClassifier {
 
         // 1. `invoke`/`invoke_signed`: accounts are benign when the callee is
         //    a known validating builtin (unknown callees were already marked
-        //    as program uses by the pre-scan).
+        //    as program uses by the pre-scan) — or, in the relaxed mode, for
+        //    any callee (SAT019/SAT021 CPI-delegated authorities).
         if INVOKE_NAMES.contains(&last) {
             let known = c.args.first().and_then(|prog| self.known_program(prog, walk.bindings, walk.key_checks, 0));
-            let accounts_ctx = if known.is_some() { Ctx::CpiArg } else { Ctx::Normal };
+            let accounts_ctx = if walk.relaxed || known.is_some() { Ctx::CpiArg } else { Ctx::Normal };
             for (i, arg) in c.args.iter().enumerate() {
                 let actx = if i == 1 { accounts_ctx } else { ctx };
                 self.walk_expr(arg, actx, walk);
@@ -1243,12 +1890,22 @@ impl CpiClassifier {
 
         // 2. Instruction builders (`spl_token::instruction::transfer`, ...):
         //    the `.key` reads that construct the CPI are benign when the
-        //    builder's program is a known validating builtin.
+        //    builder's program is a known validating builtin — or, relaxed,
+        //    for any builder.
         if is_instruction_builder(&callee) {
             let known = self.builder_program(&callee, &c.args, walk.bindings, walk.key_checks, 0);
-            let builder_ctx = if known.is_some() { Ctx::CpiArg } else { Ctx::Normal };
+            let builder_ctx = if walk.relaxed || known.is_some() { Ctx::CpiArg } else { Ctx::Normal };
             for arg in &c.args {
                 self.walk_expr(arg, builder_ctx, walk);
+            }
+            return;
+        }
+
+        // 2b. `AccountMeta::new(..)` / `AccountMeta::new_readonly(..)`:
+        //     CPI metadata construction — benign in the relaxed mode.
+        if walk.relaxed && matches!(last, "new" | "new_readonly") && callee.contains("AccountMeta") {
+            for arg in &c.args {
+                self.walk_expr(arg, Ctx::CpiArg, walk);
             }
             return;
         }
@@ -1277,7 +1934,7 @@ impl CpiClassifier {
                         // Helper depth limit (spec section 6): conservative.
                         *walk.state = UseClass::Used;
                     } else if let Some(param) = helper.params.get(i) {
-                        if self.classify(&helper, param, walk.depth + 1) == UseClass::Used {
+                        if self.classify(&helper, param, walk.depth + 1, walk.relaxed) == UseClass::Used {
                             *walk.state = UseClass::Used;
                         }
                     } else {
@@ -1296,7 +1953,6 @@ impl CpiClassifier {
         }
     }
 }
-
 /// The accounts argument of an invoke call, resolved through bindings.
 enum AccountsOf {
     /// Inline array literal elements.
@@ -1305,6 +1961,41 @@ enum AccountsOf {
     BoundArray(String, Vec<String>),
     /// Unresolvable (macros, slices of the accounts param, ...).
     Unresolved,
+}
+
+/// Collect every path identifier mentioned in a handler and its local helper
+/// call graph (depth ≤ 2, cycle-guarded): the reference set for the SAT020
+/// unreferenced-account suppression.
+fn collect_handler_idents(
+    block: &syn::Block,
+    index: &Rc<FnIndex>,
+    caller_file: &str,
+    depth: usize,
+    visited: &mut HashSet<String>,
+    out: &mut HashSet<String>,
+) {
+    if depth > 2 {
+        return;
+    }
+    walk_all(block, &mut |e| match e {
+        syn::Expr::Path(p) => {
+            if let Some(ident) = p.path.get_ident() {
+                out.insert(ident.to_string());
+            }
+        }
+        syn::Expr::Call(c) => {
+            let Some(callee) = path_key(&c.func) else { return };
+            let Some(last) = callee.rsplit("::").next() else { return };
+            if !visited.insert(last.to_string()) {
+                return;
+            }
+            if let Some(helper) = index.lookup(last, caller_file) {
+                collect_handler_idents(&helper.block, index, caller_file, depth + 1, visited, out);
+            }
+            visited.remove(last);
+        }
+        _ => {}
+    });
 }
 
 fn accounts_of(e: &syn::Expr, bindings: &HashMap<String, syn::Expr>, depth: usize) -> AccountsOf {
