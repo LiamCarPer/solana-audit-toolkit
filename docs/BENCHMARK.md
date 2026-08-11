@@ -213,3 +213,127 @@ unpack-based dispatch path is a documented frontend limitation to verify next.
    native programs so engagement is visible in the text output.
 
 Raw outputs: `bench/mango-v3-native.out`, `bench/spl-token-lending-native.out`.
+
+---
+
+# Live native corpus expansion (second run, 2026-08-11)
+
+Five real programs + one exploit-era recall run, on top of the FP fixes from
+the first native round. Clones pinned and gitignored under `bench/programs/`
+(marinade `b8fe3f8`, jito-programs `ce1dfb6`, stake-deposit-interceptor
+`dbd8ce4`, jito-restaking `b070bc29`, wormhole `79ab522` — the last
+pre-exploit commit). All outputs re-generated with a frozen binary of the
+fixed tree; raw outputs committed in `bench/`.
+
+## Targets and headline numbers
+
+| Target | Backend | Instructions resolved | Findings (pre-fix) | Findings (post-fix) | Read |
+|---|---|---|---|---|---|
+| Marinade liquid-staking (`liquid-staking-program`) | Anchor | 29/29 | 14 (3 HIGH) | 11 (10 LOW hardening, 1 INFO) | 3 SAT005 HIGH FPs killed |
+| Jito TipRouter (`tip-distribution`) | Anchor | 10/10 | 11 (6 HIGH) | 10 (5 HIGH, 4 LOW, 1 INFO) | SAT009 sysvar FP fixed; has_one handler-guard FPs remain (documented pattern) |
+| Jito Stake Deposit Interceptor | native | 1 / 0 accounts (frontend-depth gap: borsh enum-unpack dispatch, 9 variants enumerated manually) | 1 INFO | 2 HIGH | Token-2022 detection now engages; transfer-fee-bypass signals surfaced |
+| Jito Restaking (`restaking_program`) | native | 25 | 103 (75 HIGH) | 33 (8 HIGH, 25 MED) | helper-guard recognition killed the auth clusters |
+| Jito Vault (`vault_program`) | native | 32 (28 with accounts) | 141 (112 HIGH) | 36 (9 HIGH, 27 MED) | same + SAT030/SAT028 suppression |
+| Wormhole Solana bridge (exploit-era `79ab522`, Feb 2022) | native | **0** (entrypoint/dispatch generated inside the `solitaire!` macro) | 1 INFO | 1 INFO | **recall: NOT-DETECTED** — see below |
+
+## Wormhole recall run (the honest headline)
+
+The exact exploit-era tree was checked out (commit `79ab522`, the direct
+parent of the same-day fix `7edbbd36` — Soken's "fix committed but not
+deployed" is confirmed by git dates). The vulnerable code is present and
+verified: `verify_signature.rs:92-105` calls `load_instruction_at` (unchecked)
+on `accs.instruction_acc.try_borrow_mut_data()`, and `instruction_acc` is a
+bare `Info` (no owner/key validation — the framework's `Peel for Info` checks
+mutability only, unlike `Peel for Sysvar` which checks the sysvar id).
+
+**Verdict: NOT-DETECTED.** The native frontend resolves **zero instructions**
+— the `solitaire!` macro generates the entrypoint, the `match d[0]` dispatch,
+and the account peeling, all invisible to the AST scanner. No rule ran, so
+even the closest candidate (SAT020 Unverified Owner on `instruction_acc`)
+never fired. This is a frontend-resolution miss, not a rule-level near-miss;
+the corpus entry is updated to reflect that the generic-Missing-Owner
+"PARTIAL" does not materialize on the real native run. The exact
+`load_instruction_at` misuse is outside every shipped rule's model either way.
+
+## FP fixes landed this round (fix-everything policy)
+
+1. **FIXED — Token-2022 negative signal (false NEGATIVE):** `token2022.rs`
+   only scanned `pub fn`s directly inside modules — impl-block methods and
+   file-level imports were invisible, so SDI/restaking (which use
+   `spl_token_2022_interface` in impls) were reported "No Token-2022 Usage
+   Detected". Now scans all fn bodies + raw source. (restaking/vault/SDI
+   Token-2022 findings now engage; SDI 1 INFO -> 2 HIGH.)
+2. **FIXED — SAT005 name-heuristic FP (Marinade `create_canonical_stake`,
+   Jito `InitializeMerkleRootUploadConfig`):** `check_reinit_risk` fired on
+   `create_`/`init_`-named structs with zero `init` fields. Now requires at
+   least one `#[account(init)]` field in the struct. (Marinade 3 HIGH killed.)
+   Residual documented: a `mut`-without-`init` field that is never written in
+   the handler still fires when the struct legitimately inits something else
+   (TipRouter `config`); suppressing that needs handler write-target analysis
+   (future work).
+3. **FIXED — SAT009 sysvar accessor FP (Jito TipRouter `Clock::get()`):**
+   `Clock::get()`/`Sysvar::get()` read the sysvar at its fixed address and
+   need no declared account (Anchor only needs the field for constraint
+   references). Accessor-only use is no longer flagged; non-accessor
+   references still are.
+4. **FIXED — native auth helper-guard blindness (SAT019/020/021, Jito
+   restaking/vault — the round's biggest cluster, 186 HIGHs):** `auth.rs`
+   now recognizes a curated whitelist of guard helpers by call name:
+   `load_signer`/`require_signer`/`check_signer`/`assert_signer` (signer),
+   `load_system_account`/`load_token_account`/`load_token_mint`/
+   `load_associated_token_account`/`load_mpl_metadata_program` (owner),
+   `check_admin`/`check_delegate_admin`/`check_staker`/`check_authority`/
+   `check_owner` (key). Deliberately NOT matched: bare `load`/`load_checked`
+   — Mango's `TokenAccount::load_checked` checks nothing and its leads must
+   keep firing (verified: Mango's finding set is byte-identical after the
+   fix). Restaking 75 -> 8 HIGH, vault 112 -> 9 HIGH.
+5. **FIXED — SAT030 multi-writer / SAT028 canonical-PDA noise (Jito vault):**
+   SAT030 no longer fires for account classes with no close/reassign path
+   anywhere in the program; SAT028 no longer fires when the CPI authority is
+   a program-derived PDA signing via `invoke_signed`.
+
+## Residuals (honest, documented, not swept)
+
+- **SAT001 `has_one` handler-guard FPs (4 HIGH, TipRouter):** authorization
+  centralized in `impl …::auth` fns (`if stored != signer.key()`), invisible
+  to constraint scans — the documented basic-4 pattern (benchmark Action 2,
+  first run). Candidate fix (deferred): scan handler bodies for auth-fn
+  calls before emitting.
+- **Push-transfer `new_admin`/`new_owner` (SAT019/021, restaking/vault):**
+  role-transfer handlers where the NEW admin/owner does not sign — standard
+  push-transfer design; HARDENING-grade notes, intentionally kept.
+- **Transfer-fee-bypass HIGHs on delegate-token-account paths (SDI 2,
+  restaking 2, vault 1):** newly surfaced by the Token-2022 detection fix;
+  the flagged paths delegate via `approve` rather than transfer — candidate
+  FP for the fee rule, needs manual confirmation; kept as leads.
+- **SAT025 deser-local guard gap:** `try_from_slice_unchecked` after a
+  `::load` discriminator guard still flags (guard-scan is Index-only) —
+  documented first-run Action 3, unchanged.
+- **Frontend depth (engagement, not failures):** SDI (borsh enum-unpack, 9
+  variants enumerated), wormhole (`solitaire!` macro), and `split_at`
+  destructuring (3 vault handlers) resolve 0 accounts; Mango's
+  `LendingInstruction::unpack` remains unresolved. Each is documented in its
+  target row. Wormhole's zero-resolution is why the recall verdict is
+  NOT-DETECTED.
+
+## Reproduction
+
+Commands (frozen binary, from repo root; clones pinned under `bench/programs/`):
+
+```sh
+target/debug/sat.exe analyze src bench/programs/liquid-staking-program/programs/marinade-finance/src > bench/marinade-lsp.out
+target/debug/sat.exe analyze src bench/programs/jito-programs/mev-programs/programs/tip-distribution/src > bench/jito-tip-distribution.out
+target/debug/sat.exe analyze src bench/programs/stake-deposit-interceptor/stake_deposit_interceptor/src > bench/jito-sdi.out
+target/debug/sat.exe analyze src bench/programs/jito-restaking/restaking_program/src > bench/jito-restaking.out
+target/debug/sat.exe analyze src bench/programs/jito-restaking/vault_program/src > bench/jito-vault.out
+target/debug/sat.exe analyze src bench/programs/wormhole/solana/bridge/program/src > bench/wormhole-bridge-recall.out
+```
+
+Expectations exports: `--expectations bench/<target>-expectations.json` for
+the native targets (restaking, vault, sdi; wormhole exports an empty doc —
+no native marker visible). Mango regression check (must stay 3x SAT020 leads +
+2x SAT026): `target/debug/sat.exe analyze src bench/programs/mango-v3/program/src`.
+
+**Excluded (documented):** Drift v2 (no public repos), Jupiter main swap
+(closed-source), jito-lst (not public), Amulet/Cypher source (repos gone —
+writeup-only corpus entries, see `docs/EXPLOIT_CORPUS.md`).
