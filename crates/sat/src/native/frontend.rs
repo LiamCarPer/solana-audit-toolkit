@@ -12,7 +12,13 @@
 //!   patterns, u8 tag matches (`match instruction_data[0]` /
 //!   `instruction.tag`-style), and enum-variant matches
 //!   (`match instruction { Instruction::Deposit { .. } => ... }`, with
-//!   variant → tag mapping recovered from `unpack`/`try_from` impls).
+//!   variant → tag mapping recovered from `unpack`/`try_from`/`from`/
+//!   `try_from_slice` impls, falling back to borsh declaration order);
+//!   the single-callee delegation chain is followed (entrypoint →
+//!   `Processor::process`-style impl methods), and when no entrypoint
+//!   marker exists at all, dispatch tables embedded in framework macro
+//!   invocations (`solitaire!`-class, `Name(DataType) => handler` rows)
+//!   are recovered from the macro's tokens.
 //! * **Account resolution** — all four strategies from spec section 5:
 //!   1. positional iterator (`next_account_info` / `iter.next()` over a
 //!      tracked iterator, call order = position);
@@ -22,6 +28,11 @@
 //!   4. helper call graph — helpers taking `&[AccountInfo]`,
 //!      `&mut AccountInfoIter`, or `&AccountInfo` are analyzed in call
 //!      order, depth ≤ 2, cycle-guarded.
+//!      Plus two structural sources: shank `#[account(N, ...)]` attributes on
+//!      dispatched enum variants (authoritative positional names with
+//!      `account_N` fallbacks, merged with handler guard flags by index) and
+//!      `accounts.split_at(N)` tuple destructuring (both halves tracked as
+//!      positional slices, continuation across the split).
 //! * **Guard flags** — `is_signer` / `.key` / `.owner` member accesses
 //!   inside `if`/`while` conditions, `require!`/`assert!`/`invariant!`
 //!   macros, and match scrutinees, plus `check_owner`-style helper calls;
@@ -43,9 +54,13 @@ use crate::native::model::{AccountKind, NativeInstruction, NativeProgram, Resolv
 // ── Paradigm detection (spec section 4) ─────────────────────────────────────
 
 /// Whether the file carries a native marker: an `entrypoint!(...)` macro
-/// invocation or a `process_instruction` with the canonical signature.
+/// invocation, a `process_instruction` with the canonical signature, or a
+/// framework macro invocation (`solitaire!`-class) whose tokens carry a
+/// dispatch table.
 pub(crate) fn has_native_marker(file: &syn::File) -> bool {
-    find_entrypoint_macro(file).is_some() || find_process_instruction_fn(file).is_some()
+    find_entrypoint_macro(file).is_some()
+        || find_process_instruction_fn(file).is_some()
+        || find_framework_dispatch(file).is_some()
 }
 
 /// `entrypoint!(handler)` macro invocation anywhere in the file (modules
@@ -143,6 +158,106 @@ fn declare_id_in_item(item: &syn::Item) -> Option<String> {
         },
         _ => None,
     }
+}
+
+// ── Framework-macro dispatch recovery (solitaire!-class) ────────────────────
+
+/// Framework macros whose invocation tokens embed a dispatch table of
+/// `Name(DataType) => handler_fn` rows. The macro expansion generates the
+/// entrypoint and a `#[repr(u8)]` instruction enum with variants in
+/// declaration order (borsh tags), so the rows are recoverable without
+/// expanding the macro. Extensible: add macro names here.
+const FRAMEWORK_DISPATCH_MACROS: [&str; 1] = ["solitaire"];
+
+fn is_framework_dispatch_macro(name: &str) -> bool {
+    FRAMEWORK_DISPATCH_MACROS.contains(&name)
+}
+
+/// Find a recognized framework-macro invocation with a dispatch-table shape
+/// anywhere in the file (modules included). Returns the `(name, handler)`
+/// rows and the macro line.
+fn find_framework_dispatch(file: &syn::File) -> Option<(Vec<(String, String)>, usize)> {
+    file.items.iter().find_map(framework_dispatch_in_item)
+}
+
+fn framework_dispatch_in_item(item: &syn::Item) -> Option<(Vec<(String, String)>, usize)> {
+    match item {
+        syn::Item::Macro(m) => {
+            let name = m.mac.path.segments.last().map(|s| s.ident.to_string());
+            if !name.as_deref().is_some_and(is_framework_dispatch_macro) {
+                return None;
+            }
+            let rows = macro_dispatch_rows(&m.mac)?;
+            Some((rows, m.mac.span().start().line))
+        }
+        syn::Item::Mod(m) => match &m.content {
+            Some((_, items)) => items.iter().find_map(framework_dispatch_in_item),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+/// Walk a macro invocation's tokens for `Name(DataType) => handler` pairs
+/// (the `solitaire!` dispatch-table shape). `=>` is tokenized as `=` `>`
+/// puncts; each row's name and handler are idents, the data type is a
+/// parenthesized group. Non-conforming tokens are skipped, so stray
+/// punctuation (trailing commas, doc fragments) does not derail recovery.
+fn macro_dispatch_rows(mac: &syn::Macro) -> Option<Vec<(String, String)>> {
+    use proc_macro2::TokenTree;
+    let tokens: Vec<TokenTree> = mac.tokens.clone().into_iter().collect();
+    let mut rows = Vec::new();
+    let mut i = 0;
+    while i + 4 < tokens.len() {
+        let name = match &tokens[i] {
+            TokenTree::Ident(id) => id.to_string(),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let data_type_ok = matches!(
+            &tokens[i + 1],
+            TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Parenthesis && !g.stream().is_empty()
+        );
+        let eq = matches!(&tokens[i + 2], TokenTree::Punct(p) if p.as_char() == '=');
+        let gt = matches!(&tokens[i + 3], TokenTree::Punct(p) if p.as_char() == '>');
+        let handler = match &tokens[i + 4] {
+            TokenTree::Ident(id) => id.to_string(),
+            _ => String::new(),
+        };
+        if data_type_ok && eq && gt && !handler.is_empty() {
+            rows.push((name, handler));
+            i += 5;
+        } else {
+            i += 1;
+        }
+    }
+    if rows.is_empty() { None } else { Some(rows) }
+}
+
+/// Build the pinned program from framework-macro rows: one instruction per
+/// row, tag = declaration order (borsh `#[repr(u8)]` enum order). Accounts
+/// are deliberately left unresolved — the framework macro peels the account
+/// list in its expansion, so resolution is framework-limited.
+fn macro_program_from_rows(rows: &[(String, String)], line: usize, file: String) -> NativeProgram {
+    let mut program = NativeProgram {
+        program_id: None,
+        entrypoint_file: file.clone(),
+        entrypoint_line: line,
+        instructions: Vec::new(),
+    };
+    for (tag, (name, handler)) in rows.iter().enumerate() {
+        program.instructions.push(NativeInstruction {
+            name: name.clone(),
+            discriminator: Some(vec![tag as u8]),
+            handler: handler.clone(),
+            file: file.clone(),
+            line,
+            accounts: Vec::new(),
+        });
+    }
+    program
 }
 
 // ── File index ──────────────────────────────────────────────────────────────
@@ -260,6 +375,9 @@ struct DispatchArm {
     discriminator: Option<Vec<u8>>,
     handler: String,
     line: usize,
+    /// Matched enum type name (Enum dispatch only) — enables shank
+    /// `#[account(N)]` recovery from the enum variant's attributes.
+    enum_name: Option<String>,
 }
 
 /// Find the dispatch match in the handler body and recover one arm per
@@ -364,6 +482,7 @@ fn collect_callees_in_expr(e: &syn::Expr, index: &FileIndex, out: &mut Vec<Strin
         syn::Expr::Loop(l) => collect_callees_in_block(&l.body, index, out),
         syn::Expr::ForLoop(fl) => collect_callees_in_block(&fl.body, index, out),
         syn::Expr::Try(t) => collect_callees_in_expr(&t.expr, index, out),
+        syn::Expr::Let(l) => collect_callees_in_expr(&l.expr, index, out),
         syn::Expr::Paren(p) => collect_callees_in_expr(&p.expr, index, out),
         syn::Expr::Reference(r) => collect_callees_in_expr(&r.expr, index, out),
         syn::Expr::Binary(b) => {
@@ -448,7 +567,7 @@ fn dispatch_arms(m: &syn::ExprMatch, files: &[(syn::File, String)]) -> Option<Ve
             let tags = find_variant_tags(files, &enum_name);
             for arm in &m.arms {
                 if let Some(a) = arm_from_enum(arm, &tags) {
-                    arms.push(a);
+                    arms.push(DispatchArm { enum_name: Some(enum_name.clone()), ..a });
                 }
             }
         }
@@ -538,7 +657,13 @@ fn arm_from_slice(arm: &syn::Arm) -> Option<DispatchArm> {
         }
     };
     let discriminator = if bytes.is_empty() { None } else { Some(bytes) };
-    Some(DispatchArm { name, discriminator, handler: handler.unwrap_or_default(), line: arm.span().start().line })
+    Some(DispatchArm {
+        name,
+        discriminator,
+        handler: handler.unwrap_or_default(),
+        line: arm.span().start().line,
+        enum_name: None,
+    })
 }
 
 /// u8 tag arm: `0 => handler(...)`. Name falls back to `instruction_0x<tag>`.
@@ -555,6 +680,7 @@ fn arm_from_tag(arm: &syn::Arm) -> Option<DispatchArm> {
         discriminator: Some(vec![tag]),
         handler,
         line: arm.span().start().line,
+        enum_name: None,
     })
 }
 
@@ -564,7 +690,7 @@ fn arm_from_enum(arm: &syn::Arm, variant_tags: &HashMap<String, u8>) -> Option<D
     let variant = path_ident_str(path)?;
     let discriminator = variant_tags.get(&variant).map(|tag| vec![*tag]);
     let handler = arm_handler(&arm.body).unwrap_or_default();
-    Some(DispatchArm { name: variant, discriminator, handler, line: arm.span().start().line })
+    Some(DispatchArm { name: variant, discriminator, handler, line: arm.span().start().line, enum_name: None })
 }
 
 fn enum_name_from_arms(arms: &[syn::Arm]) -> Option<String> {
@@ -577,8 +703,9 @@ fn enum_name_from_arms(arms: &[syn::Arm]) -> Option<String> {
     None
 }
 
-/// Variant → u8 tag mapping recovered from `unpack`/`try_from`/`from`
-/// functions inside `impl <EnumName>` blocks.
+/// Variant → u8 tag mapping recovered from `unpack`/`try_from`/`from`/
+/// `try_from_slice` functions inside `impl <EnumName>` blocks, falling back
+/// to borsh declaration order when no manual decoder exists in the source.
 fn find_variant_tags(files: &[(syn::File, String)], enum_name: &str) -> HashMap<String, u8> {
     let mut tags = HashMap::new();
     for (file, _) in files {
@@ -590,7 +717,10 @@ fn find_variant_tags(files: &[(syn::File, String)], enum_name: &str) -> HashMap<
             }
             for member in &imp.items {
                 let syn::ImplItem::Fn(f) = member else { continue };
-                if !matches!(f.sig.ident.to_string().as_str(), "unpack" | "try_from" | "from") {
+                if !matches!(
+                    f.sig.ident.to_string().as_str(),
+                    "unpack" | "try_from" | "from" | "try_from_slice" | "try_from_slice_unchecked"
+                ) {
                     continue;
                 }
                 let mut matches = Vec::new();
@@ -611,6 +741,25 @@ fn find_variant_tags(files: &[(syn::File, String)], enum_name: &str) -> HashMap<
                             tags.entry(variant).or_insert(tag);
                         }
                     }
+                }
+            }
+        }
+    }
+    if tags.is_empty() {
+        // Borsh-derive fallback: `#[derive(BorshDeserialize)]` generates a
+        // `try_from_slice` that reads the variant tag as the declaration
+        // index (u8, borsh order) — the same order shank instruction
+        // builders and `#[repr(u8)]` solitaire-style enums rely on. Applies
+        // when no manual decoder impl exists in the workspace (SDI,
+        // jito-sdk enum dispatch, etc.).
+        for (file, _) in files {
+            for item in &file.items {
+                let syn::Item::Enum(en) = item else { continue };
+                if en.ident != enum_name {
+                    continue;
+                }
+                for (idx, variant) in en.variants.iter().enumerate() {
+                    tags.entry(variant.ident.to_string()).or_insert(idx as u8);
                 }
             }
         }
@@ -728,6 +877,7 @@ fn walk_matches_in_expr(e: &syn::Expr, out: &mut Vec<syn::ExprMatch>) {
             }
         }
         syn::Expr::Try(t) => walk_matches_in_expr(&t.expr, out),
+        syn::Expr::Let(l) => walk_matches_in_expr(&l.expr, out),
         syn::Expr::Paren(p) => walk_matches_in_expr(&p.expr, out),
         syn::Expr::Reference(r) => walk_matches_in_expr(&r.expr, out),
         syn::Expr::Binary(b) => {
@@ -1033,6 +1183,26 @@ impl<'a> ResolutionState<'a> {
             return;
         }
 
+        // `let (required, optional) = accounts.split_at(N);` (Jito style):
+        // track both halves as positional slices — the fixed head starts at
+        // the current position and the tail continues after the split, so a
+        // later `let [a, b, ..] = required` / `optional.first()` keeps the
+        // account index sequence unbroken.
+        if let syn::Pat::Tuple(tp) = &local.pat
+            && let Some((first, second)) = self.split_at_slices(init)
+        {
+            let mut elems = tp.elems.iter();
+            if let Some(syn::Pat::Ident(pi)) = elems.next() {
+                self.slices.insert(pi.ident.to_string(), first);
+            }
+            if let Some(syn::Pat::Ident(pi)) = elems.next() {
+                self.slices.insert(pi.ident.to_string(), second);
+            }
+            self.base = self.base.max(second);
+            self.next_index = self.next_index.max(second);
+            return;
+        }
+
         let Some(name) = pat_ident(&local.pat) else {
             self.walk_expr(init);
             return;
@@ -1157,6 +1327,15 @@ impl<'a> ResolutionState<'a> {
                 {
                     self.consume(&iter);
                 }
+                if m.method == "first"
+                    && let Some(iter) = iterator_var(&m.receiver)
+                    && !iter.is_empty()
+                    && self.slices.contains_key(&iter)
+                {
+                    // `optional_accounts.first()` style peek over a tracked
+                    // slice (Jito `split_at` tail) — one positional account.
+                    self.consume(&iter);
+                }
                 self.walk_expr(&m.receiver);
                 for arg in &m.args {
                     self.walk_expr(arg);
@@ -1242,7 +1421,8 @@ impl<'a> ResolutionState<'a> {
                 }
             }
             syn::Expr::Async(a) => self.resolve_block(&a.block),
-            syn::Expr::Path(_) | syn::Expr::Lit(_) | syn::Expr::Let(_) => {}
+            syn::Expr::Let(l) => self.walk_expr(&l.expr),
+            syn::Expr::Path(_) | syn::Expr::Lit(_) => {}
             _ => {}
         }
     }
@@ -1270,6 +1450,7 @@ impl<'a> ResolutionState<'a> {
                 self.walk_guard_cond(&b.right);
             }
             syn::Expr::Unary(u) => self.walk_guard_cond(&u.expr),
+            syn::Expr::Let(l) => self.walk_guard_cond(&l.expr),
             syn::Expr::Paren(p) => self.walk_guard_cond(&p.expr),
             syn::Expr::Reference(r) => self.walk_guard_cond(&r.expr),
             syn::Expr::Try(t) => self.walk_guard_cond(&t.expr),
@@ -1471,6 +1652,23 @@ impl<'a> ResolutionState<'a> {
         }
     }
 
+    /// Positions of the two halves of an `<accounts | tracked-slice>.split_at(N)`
+    /// binding: `(base, base + N)`.
+    fn split_at_slices(&self, init: &syn::Expr) -> Option<(usize, usize)> {
+        let e = unwrap_expr(init);
+        let syn::Expr::MethodCall(m) = e else { return None };
+        if m.method != "split_at" {
+            return None;
+        }
+        let base = match expr_path_name(&m.receiver) {
+            Some(name) if self.accounts_param.as_ref().is_some_and(|p| p == &name) => self.base,
+            Some(name) => *self.slices.get(&name)?,
+            None => return None,
+        };
+        let n = literal_usize(m.args.first()?)?;
+        Some((base, base + n))
+    }
+
     /// Resolve an expression to an account index: named variable, struct
     /// `try_from` field access, or subscript of the accounts slice.
     fn resolve_base_account(&self, e: &syn::Expr) -> Option<usize> {
@@ -1510,6 +1708,135 @@ impl<'a> ResolutionState<'a> {
             _ => self.resolve_base_account(e),
         }
     }
+}
+
+// ── Shank `#[account(N)]` attributes ────────────────────────────────────────
+
+/// One shank `#[account(N, writable, signer, name = "x", ...)]` attribute:
+/// `(position, explicit name, signer flag)`. `None` when the attribute is
+/// not a shank account annotation.
+fn shank_account_meta(attr: &syn::Attribute) -> Option<(usize, Option<String>, bool)> {
+    if attr.path().segments.last()?.ident != "account" {
+        return None;
+    }
+    let syn::Meta::List(ml) = &attr.meta else { return None };
+    // syn 2 removed `NestedMeta`; parse the attribute body as expressions and
+    // fold the shapes (bare int literal, bare path, `name = value`) back.
+    let Ok(metas) = ml.parse_args_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated) else {
+        return None;
+    };
+    let mut position: Option<usize> = None;
+    let mut name: Option<String> = None;
+    let mut signer = false;
+    for meta in metas {
+        match meta {
+            syn::Expr::Lit(expr_lit) => {
+                if let syn::Lit::Int(i) = expr_lit.lit {
+                    position = Some(i.base10_parse::<usize>().ok()?);
+                }
+            }
+            syn::Expr::Path(p) => {
+                if p.path.is_ident("signer") {
+                    signer = true;
+                }
+            }
+            syn::Expr::Assign(assign) => {
+                let syn::Expr::Path(p) = &*assign.left else { continue };
+                if p.path.is_ident("name")
+                    && let syn::Expr::Lit(expr_lit) = &*assign.right
+                    && let syn::Lit::Str(s) = &expr_lit.lit
+                {
+                    name = Some(s.value());
+                }
+            }
+            _ => {}
+        }
+    }
+    Some((position?, name, signer))
+}
+
+/// Positional account table declared by shank `#[account(N)]` attributes on
+/// an enum variant. Positions are the contract; gaps are filled with
+/// `account_N` fallback names, and the `signer` flag maps to
+/// [`AccountKind::Signer`] (signer-by-construction, like Anchor's `Signer`).
+fn shank_variant_accounts(
+    files: &[(syn::File, String)],
+    enum_name: &str,
+    variant: &str,
+) -> Option<Vec<ResolvedAccount>> {
+    let mut rows: Vec<(usize, String, AccountKind)> = Vec::new();
+    for (file, _) in files {
+        for item in &file.items {
+            let syn::Item::Enum(en) = item else { continue };
+            if en.ident != enum_name {
+                continue;
+            }
+            let Some(v) = en.variants.iter().find(|v| v.ident == variant) else {
+                continue;
+            };
+            for attr in &v.attrs {
+                if let Some((pos, name, signer)) = shank_account_meta(attr) {
+                    let name = name.unwrap_or_else(|| format!("account_{pos}"));
+                    let kind = if signer { AccountKind::Signer } else { AccountKind::Unchecked };
+                    rows.push((pos, name, kind));
+                }
+            }
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let max = rows.iter().map(|(p, _, _)| *p).max()?;
+    let mut table: HashMap<usize, ResolvedAccount> = HashMap::new();
+    for i in 0..=max {
+        table.insert(
+            i,
+            ResolvedAccount {
+                name: format!("account_{i}"),
+                index: i,
+                kind: AccountKind::Unchecked,
+                is_signer_checked: false,
+                owner_checked: false,
+                key_checked: false,
+                written: false,
+                seeds: Vec::new(),
+                is_pda: false,
+            },
+        );
+    }
+    for (pos, name, kind) in rows {
+        if let Some(e) = table.get_mut(&pos) {
+            e.name = name;
+            e.kind = kind;
+        }
+    }
+    let mut accounts: Vec<ResolvedAccount> = table.into_values().collect();
+    accounts.sort_by_key(|a| a.index);
+    Some(accounts)
+}
+
+/// Merge a shank-declared positional table into handler-resolved accounts:
+/// shank names (when not `account_N` fallbacks) and kinds win — they are the
+/// positional contract — while handler analysis contributes guard flags
+/// (signer/owner/key checks, writes, PDAs) by index.
+fn merge_shank_accounts(handler: Vec<ResolvedAccount>, shank: Vec<ResolvedAccount>) -> Vec<ResolvedAccount> {
+    let mut merged: HashMap<usize, ResolvedAccount> = HashMap::new();
+    for a in handler {
+        merged.insert(a.index, a);
+    }
+    for s in shank {
+        let e = merged.entry(s.index).or_insert_with(|| s.clone());
+        let fallback = format!("account_{}", s.index);
+        if s.name != fallback {
+            e.name = s.name.clone();
+        }
+        if e.kind == AccountKind::Unchecked {
+            e.kind = s.kind;
+        }
+    }
+    let mut accounts: Vec<ResolvedAccount> = merged.into_values().collect();
+    accounts.sort_by_key(|a| a.index);
+    accounts
 }
 
 /// One side of a comparison: the account index when the side is an account's
@@ -2010,6 +2337,15 @@ pub(crate) fn build_program(files: &[(syn::File, String)]) -> NativeProgram {
         }
     }
     let Some((entrypoint_handler, entrypoint_line, entrypoint_file_idx)) = entrypoint else {
+        // Framework-macro dispatch recovery (wormhole `solitaire!` class): no
+        // entrypoint!/process_instruction marker exists — the entrypoint and
+        // dispatch table are both generated by the macro, whose invocation
+        // tokens carry `Name(DataType) => handler` rows.
+        for (i, (file, _)) in files.iter().enumerate() {
+            if let Some((rows, line)) = find_framework_dispatch(file) {
+                return macro_program_from_rows(&rows, line, files[i].1.clone());
+            }
+        }
         return NativeProgram::default();
     };
 
@@ -2038,7 +2374,21 @@ pub(crate) fn build_program(files: &[(syn::File, String)]) -> NativeProgram {
                 state.current_file = file.clone();
                 state.accounts_param = accounts_param_name(f);
                 state.resolve_block(&f.block);
-                state.finish_accounts()
+                let handler_accounts = state.finish_accounts();
+                // Shank `#[account(N)]` annotations on the dispatched enum
+                // variant supply the authoritative positional table (names
+                // with `account_N` fallbacks); handler guard flags survive
+                // the merge by index.
+                if let Some(enum_name) = &arm.enum_name
+                    && let Some(shank) = shank_variant_accounts(files, enum_name, &arm.name)
+                {
+                    merge_shank_accounts(handler_accounts, shank)
+                } else {
+                    handler_accounts
+                }
+            } else if let Some(enum_name) = &arm.enum_name {
+                // Handler not in the workspace: the shank table alone.
+                shank_variant_accounts(files, enum_name, &arm.name).unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -2073,4 +2423,125 @@ pub(crate) fn build_program(files: &[(syn::File, String)]) -> NativeProgram {
     }
 
     program
+}
+
+// ── In-module tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(src: &str) -> syn::File {
+        syn::parse_file(src).expect("test source should parse")
+    }
+
+    fn build(src: &str) -> NativeProgram {
+        let file = parse(src);
+        build_program(&[(file, "test.rs".to_string())])
+    }
+
+    #[test]
+    fn has_native_marker_recognizes_framework_macro_dispatch() {
+        let file = parse(
+            "solitaire! { Initialize(InitializeData) => initialize, PostMessage(PostMessageData) => post_message }",
+        );
+        assert!(has_native_marker(&file), "solitaire! token table is a native marker");
+    }
+
+    #[test]
+    fn has_native_marker_ignores_unrecognized_macros() {
+        let file = parse("some_macro! { Initialize(InitializeData) => initialize }");
+        assert!(!has_native_marker(&file));
+    }
+
+    #[test]
+    fn macro_dispatch_rows_recovers_solitaire_rows() {
+        let file = parse(
+            r#"solitaire! {
+                Initialize(InitializeData)      => initialize,
+                PostVAA(PostVAAData)            => post_vaa,
+                VerifySignatures(VerifySignaturesData) => verify_signatures,
+            }"#,
+        );
+        let (rows, _line) = find_framework_dispatch(&file).expect("dispatch rows recovered");
+        assert_eq!(
+            rows,
+            vec![
+                ("Initialize".to_string(), "initialize".to_string()),
+                ("PostVAA".to_string(), "post_vaa".to_string()),
+                ("VerifySignatures".to_string(), "verify_signatures".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn macro_recovery_builds_ordered_borsh_instructions() {
+        let p = build(
+            r#"solitaire! {
+                Initialize(InitializeData)   => initialize,
+                PostMessage(PostMessageData) => post_message,
+                PostVAA(PostVAAData)         => post_vaa,
+            }"#,
+        );
+        assert_eq!(p.instructions.len(), 3);
+        for (i, ix) in p.instructions.iter().enumerate() {
+            assert_eq!(ix.discriminator, Some(vec![i as u8]), "borsh order = declaration order");
+            assert!(ix.accounts.is_empty(), "framework-peeled accounts stay unresolved");
+        }
+        assert_eq!(p.instructions[0].name, "Initialize");
+        assert_eq!(p.instructions[0].handler, "initialize");
+        assert_eq!(p.instructions[2].name, "PostVAA");
+        assert_eq!(p.instructions[2].handler, "post_vaa");
+        assert!(p.entrypoint_line >= 1);
+    }
+
+    #[test]
+    fn variant_tags_fall_back_to_borsh_declaration_order() {
+        let file = parse("pub enum Instruction { Alpha, Beta, Gamma }");
+        let tags = find_variant_tags(&[(file, "test.rs".to_string())], "Instruction");
+        assert_eq!(tags.get("Alpha"), Some(&0));
+        assert_eq!(tags.get("Beta"), Some(&1));
+        assert_eq!(tags.get("Gamma"), Some(&2));
+    }
+
+    #[test]
+    fn variant_tags_recognize_try_from_slice_decoder() {
+        // Manual `try_from_slice` decoders (borsh-style) are recognized the
+        // same way `unpack` impls are.
+        let file = parse(
+            r#"
+            pub enum Instruction { A, B }
+            impl Instruction {
+                pub fn try_from_slice(input: &[u8]) -> Result<Self, ()> {
+                    match input[0] {
+                        7 => Ok(Instruction::A),
+                        9 => Ok(Instruction::B),
+                        _ => Err(()),
+                    }
+                }
+            }
+            "#,
+        );
+        let tags = find_variant_tags(&[(file, "test.rs".to_string())], "Instruction");
+        assert_eq!(tags.get("A"), Some(&7));
+        assert_eq!(tags.get("B"), Some(&9));
+    }
+
+    #[test]
+    fn shank_account_meta_parses_position_name_and_signer() {
+        let file = parse(
+            r#"
+            pub enum E {
+                #[account(4, signer, name = "base", desc = "Base for PDA seed")]
+                V,
+            }
+            "#,
+        );
+        let syn::Item::Enum(en) = &file.items[0] else { panic!("enum expected") };
+        let attr = en.variants[0].attrs.first().expect("account attr");
+        let (pos, name, signer) = shank_account_meta(attr).expect("shank meta parsed");
+        assert_eq!(pos, 4);
+        assert_eq!(name.as_deref(), Some("base"));
+        assert!(signer);
+    }
 }

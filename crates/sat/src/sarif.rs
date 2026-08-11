@@ -148,6 +148,16 @@ const RULES: &[(&str, &str, &str)] = &[
         "Self-Referential Validation",
         "Account validation compares only caller-supplied accounts to each other without anchoring to canonical program state.",
     ),
+    (
+        "SAT032",
+        "Permissionless State Creation",
+        "A state-creating instruction records a caller-chosen authority key without requiring its signature.",
+    ),
+    (
+        "SAT033",
+        "Unanchored Token Mint",
+        "A token transfer/mint CPI whose source token account's mint identity is never compared to canonical state.",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -250,6 +260,10 @@ pub(crate) fn classify_finding_rule(finding: &Finding) -> String {
     // (e.g. "Mismatch", "Sysvar") and would swallow the new titles.
     if finding.title.contains("Self-Referential Validation") {
         "SAT031".to_string()
+    } else if finding.title.contains("Permissionless State Creation") {
+        "SAT032".to_string()
+    } else if finding.title.contains("Unanchored Token Mint") {
+        "SAT033".to_string()
     } else if finding.title.contains("Unverified Signer Account") {
         "SAT019".to_string()
     } else if finding.title.contains("Unverified Owner Account") {

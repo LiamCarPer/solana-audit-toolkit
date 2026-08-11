@@ -162,15 +162,19 @@ fn path_last_segment(ty: &syn::Type) -> Option<String> {
     None
 }
 
-/// In-file struct field map: struct name → (field name → leaf type ident).
-/// Used by the Anchor path to expand Accounts bundles and resolve
-/// `self.common.crate_mint`-style chains.
-struct StructIndex {
-    fields: HashMap<String, Vec<(String, String)>>,
+/// One resolved struct field: `(name, leaf type ident, field attributes)`.
+pub type StructField = (String, String, Vec<syn::Attribute>);
+
+/// In-file struct field map: struct name → [`StructField`] list. Used by the
+/// Anchor path to expand Accounts bundles, resolve
+/// `self.common.crate_mint`-style chains, and scan
+/// `#[account(constraint = ...)]` attributes on field definitions.
+pub struct StructIndex {
+    pub fields: HashMap<String, Vec<StructField>>,
 }
 
 impl StructIndex {
-    fn build(files: &[(syn::File, String)]) -> Self {
+    pub fn build(files: &[(syn::File, String)]) -> Self {
         let mut fields = HashMap::new();
         for (file, _) in files {
             collect_structs(&file.items, &mut fields);
@@ -178,19 +182,19 @@ impl StructIndex {
         StructIndex { fields }
     }
 
-    fn is_bundle(&self, type_ident: &str) -> bool {
+    pub fn is_bundle(&self, type_ident: &str) -> bool {
         self.fields.contains_key(type_ident)
     }
 }
 
-fn collect_structs(items: &[syn::Item], out: &mut HashMap<String, Vec<(String, String)>>) {
+fn collect_structs(items: &[syn::Item], out: &mut HashMap<String, Vec<StructField>>) {
     for item in items {
         match item {
             syn::Item::Struct(s) => {
                 let mut field_list = Vec::new();
                 for f in &s.fields {
-                    if let syn::Field { ident: Some(ident), ty, .. } = f {
-                        field_list.push((ident.to_string(), leaf_type_ident(ty)));
+                    if let syn::Field { ident: Some(ident), ty, attrs, .. } = f {
+                        field_list.push((ident.to_string(), leaf_type_ident(ty), attrs.clone()));
                     }
                 }
                 out.entry(s.ident.to_string()).or_insert(field_list);
@@ -211,7 +215,7 @@ fn collect_structs(items: &[syn::Item], out: &mut HashMap<String, Vec<(String, S
 /// The leaf type ident of a (possibly nested) type: `Box<Account<'info, Mint>>`
 /// → `Mint`, `BrrrCommon<'info>` → `BrrrCommon`, `Context<PrintCash>` →
 /// `PrintCash`. Lifetimes and `&` wrappers are ignored.
-fn leaf_type_ident(ty: &syn::Type) -> String {
+pub fn leaf_type_ident(ty: &syn::Type) -> String {
     match ty {
         syn::Type::Reference(r) => leaf_type_ident(&r.elem),
         syn::Type::Path(tp) => {
@@ -1083,7 +1087,7 @@ fn location(ix: &NativeInstruction) -> String {
 // ── Anchor path: `#[program]` modules → instructions ─────────────────────────
 
 /// Whether any parsed file carries an Anchor `#[program]` module.
-fn has_anchor_program(files: &[(syn::File, String)]) -> bool {
+pub fn has_anchor_program(files: &[(syn::File, String)]) -> bool {
     files.iter().any(|(file, _)| {
         file.items.iter().any(|item| match item {
             syn::Item::Mod(m) => m.attrs.iter().any(|a| a.path().is_ident("program")),
@@ -1093,19 +1097,19 @@ fn has_anchor_program(files: &[(syn::File, String)]) -> bool {
 }
 
 /// One Anchor instruction extracted from a `#[program]` module.
-struct AnchorInstruction {
-    name: String,
-    handler: String,
-    file: String,
-    line: usize,
+pub struct AnchorInstruction {
+    pub name: String,
+    pub handler: String,
+    pub file: String,
+    pub line: usize,
     /// Root Accounts struct name (the `Context<X>` type).
-    root_struct: String,
+    pub root_struct: String,
     /// The handler fn item (to scan attributes like `#[access_control(...)]`).
-    attrs: Vec<syn::Attribute>,
+    pub attrs: Vec<syn::Attribute>,
 }
 
 /// Build the Anchor instruction list from `#[program]` modules.
-fn anchor_instructions(files: &[(syn::File, String)]) -> Vec<AnchorInstruction> {
+pub fn anchor_instructions(files: &[(syn::File, String)]) -> Vec<AnchorInstruction> {
     let mut out = Vec::new();
     for (file, path) in files {
         collect_program_instructions(&file.items, path, &mut out);
@@ -1187,7 +1191,7 @@ fn expand_into(
         return;
     }
     let Some(fields) = structs.fields.get(struct_name) else { return };
-    for (fname, fty) in fields {
+    for (fname, fty, _attrs) in fields {
         if seen.insert(fname.clone()) {
             out.push((fname.clone(), fty.clone()));
         }
@@ -1232,21 +1236,55 @@ fn attr_expr_roots(attrs: &[syn::Attribute]) -> Vec<Expr> {
     out
 }
 
+/// Constraint expressions from `#[account(...)]` attributes on Accounts-struct
+/// FIELD definitions: `#[account(mut, constraint = author_fees.mint ==
+/// collateral.mint)]` yields the `author_fees.mint == collateral.mint`
+/// comparison (the post-fix Cashio shape). These join the SAT031 graph like
+/// handler-level roots.
+pub fn account_constraint_exprs(attrs: &[syn::Attribute]) -> Vec<Expr> {
+    use syn::punctuated::Punctuated;
+
+    let mut out = Vec::new();
+    for attr in attrs {
+        if !attr.path().is_ident("account") {
+            continue;
+        }
+        let syn::Meta::List(list) = &attr.meta else { continue };
+        let metas =
+            syn::parse::Parser::parse2(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated, list.tokens.clone());
+        let Ok(metas) = metas else { continue };
+        for meta in metas {
+            if let syn::Meta::NameValue(nv) = meta
+                && nv.path.is_ident("constraint")
+            {
+                out.push(nv.value);
+            }
+        }
+    }
+    out
+}
+
 // ── Shared per-instruction analysis ──────────────────────────────────────────
 
-fn analyze_instruction(
+/// The comparison graph collected for one instruction: flattened handler +
+/// helper blocks, the equality comparisons, and the reachable canonical
+/// accounts. Shared by the SAT031 chain detection and the SAT033
+/// unanchored-token-mint check.
+struct InstructionGraph<'a> {
+    blocks: Vec<&'a syn::Block>,
+    comparisons: Vec<Comparison>,
+    canonical: HashSet<usize>,
+}
+
+fn analyze_instruction_graph<'a>(
     ix: &NativeInstruction,
-    index: &FnIndex,
+    index: &'a FnIndex<'a>,
     bundles: &Bundles,
     attr_roots: &[Expr],
-) -> Vec<Finding> {
-    let mut findings = Vec::new();
+) -> Option<InstructionGraph<'a>> {
+    let (handler, file_idx) = index.lookup(&ix.handler, &ix.file)?;
 
-    let Some((handler, file_idx)) = index.lookup(&ix.handler, &ix.file) else {
-        return findings;
-    };
-
-    let mut blocks: Vec<&syn::Block> = Vec::new();
+    let mut blocks: Vec<&'a syn::Block> = Vec::new();
     let mut visited = HashSet::new();
     visited.insert((file_idx, ix.handler.clone()));
     collect_blocks(handler, index, &mut visited, 0, &mut blocks, attr_roots);
@@ -1268,10 +1306,33 @@ fn analyze_instruction(
     let mut canonical = reachable_canonical(&comparisons, seed_canonical(ix));
     canonical.extend(owner_checked_accounts(&blocks, ix));
 
+    Some(InstructionGraph { blocks, comparisons, canonical })
+}
+
+fn analyze_instruction(
+    ix: &NativeInstruction,
+    index: &FnIndex,
+    bundles: &Bundles,
+    attr_roots: &[Expr],
+) -> Vec<Finding> {
+    let Some(graph) = analyze_instruction_graph(ix, index, bundles, attr_roots) else {
+        return Vec::new();
+    };
+    sat031_findings(ix, &graph)
+}
+
+/// SAT031: one finding per unanchored (account, field) component with ≥ 2
+/// distinct nodes. Components made solely of `key`-field nodes (e.g.
+/// `a.key == b.key`) are identity-pinning idioms, not data-validation
+/// chains — the SAT019/021 slices own that pattern, so they are suppressed.
+fn sat031_findings(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let comparisons = &graph.comparisons;
+
     // Build the graph over (account, field) nodes.
     let mut nodes: Vec<(usize, String)> = Vec::new();
     let mut node_index: HashMap<(usize, String), usize> = HashMap::new();
-    for c in &comparisons {
+    for c in comparisons {
         for n in [&c.left_node, &c.right_node].into_iter().flatten() {
             if !node_index.contains_key(n) {
                 node_index.insert(n.clone(), nodes.len());
@@ -1280,14 +1341,14 @@ fn analyze_instruction(
         }
     }
     let mut uf = UnionFind::new(nodes);
-    for c in &comparisons {
+    for c in comparisons {
         let (Some(l), Some(r)) = (&c.left_node, &c.right_node) else { continue };
         let li = node_index[l];
         let ri = node_index[r];
         let anchored = matches!(c.left, Side::Anchor)
             || matches!(c.right, Side::Anchor)
-            || canonical.contains(&l.0)
-            || canonical.contains(&r.0);
+            || graph.canonical.contains(&l.0)
+            || graph.canonical.contains(&r.0);
         if anchored {
             uf.mark_anchored(li);
             uf.mark_anchored(ri);
@@ -1296,10 +1357,6 @@ fn analyze_instruction(
         }
     }
 
-    // One finding per unanchored component with ≥ 2 distinct nodes.
-    // Components made solely of `key`-field nodes (e.g. `a.key == b.key`)
-    // are identity-pinning idioms, not data-validation chains — the
-    // SAT019/021 slices own that pattern, so they are suppressed here.
     let roots: Vec<usize> = (0..uf.parent.len()).map(|i| uf.find(i)).collect();
     let mut seen_roots = HashSet::new();
     for root in &roots {
@@ -1361,6 +1418,219 @@ fn chain_summary(ix: &NativeInstruction, uf: &UnionFind, root: usize) -> String 
     parts.join(", ")
 }
 
+// ── SAT033: unanchored token mint ────────────────────────────────────────────
+
+/// The source field of a token-CPI accounts struct, and whether the pinned
+/// node is the token account's `.mint` (`true`) or the mint account's
+/// identity (`false`). Covers the anchor-spl transfer/mint/burn shapes.
+fn transfer_source_field(name: &str) -> Option<(&str, bool)> {
+    match name {
+        "Transfer" | "TransferChecked" | "Burn" | "BurnChecked" => Some(("from", true)),
+        "MintTo" | "MintToChecked" => Some(("mint", false)),
+        _ => None,
+    }
+}
+
+/// Strips `to_account_info()`/`clone()`-style wrapper calls from an
+/// expression (`self.depositor_source.to_account_info()` →
+/// `self.depositor_source`).
+fn strip_wrapper_calls(e: &Expr) -> &Expr {
+    match e {
+        Expr::MethodCall(m)
+            if matches!(m.method.to_string().as_str(), "to_account_info" | "clone" | "as_ref" | "key") =>
+        {
+            strip_wrapper_calls(&m.receiver)
+        }
+        _ => e,
+    }
+}
+
+/// SAT033: a token transfer/mint CPI whose SOURCE token account's `.mint`
+/// (or the mint account's identity) is never compared against anything at all
+/// in the instruction's validation graph. SAT031 owns chains that ARE
+/// compared but unanchored; this fires only when the mint is never touched,
+/// keeping the two checks complementary.
+fn sat033_findings(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let mut sources: Vec<(usize, bool)> = Vec::new();
+    let mut seen = HashSet::new();
+    for block in &graph.blocks {
+        collect_transfer_sources(block, ix, &mut sources, &mut seen);
+    }
+
+    for (acc_idx, is_mint_field) in sources {
+        let compared = graph.comparisons.iter().any(|c| {
+            [&c.left_node, &c.right_node]
+                .into_iter()
+                .flatten()
+                .any(|(a, f)| *a == acc_idx && (is_mint_field && f == "mint" || !is_mint_field && f == "key"))
+        });
+        if compared {
+            continue;
+        }
+        let name = ix.accounts[acc_idx].name.clone();
+        let (source_label, target_label) =
+            if is_mint_field { ("source token account", "`.mint`") } else { ("mint account", "identity (`.key`)") };
+        findings.push(Finding {
+            id: String::new(),
+            title: format!("Unanchored Token Mint: `{name}`"),
+            severity: Severity::High,
+            description: format!(
+                "Instruction `{}` performs a token transfer/mint CPI whose {source_label} `{name}` \
+                 {target_label} is never compared against canonical state (a constant, the program \
+                 id, an owner-checked account, or a pinned registry). An attacker can supply a \
+                 token account (or mint) with an arbitrary mint, and the program has no visible \
+                 anchoring check to catch it — the Cashio-class shape focused on transfer paths. \
+                 Confirm whether the handler validates the mint elsewhere.",
+                ix.name
+            ),
+            location: Some(location(ix)),
+            suggestion: Some(format!(
+                "Anchor the {source_label}'s mint identity before the CPI, e.g. \
+                 `assert_keys_eq!({name}.mint, EXPECTED_MINT)` or an \
+                 `#[account(constraint = {name}.mint == EXPECTED_MINT)]` on the Accounts field."
+            )),
+        });
+    }
+
+    findings
+}
+
+fn collect_transfer_sources(
+    block: &syn::Block,
+    ix: &NativeInstruction,
+    out: &mut Vec<(usize, bool)>,
+    seen: &mut HashSet<(usize, bool)>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Expr(e, _) => walk_transfer_sources(e, ix, out, seen),
+            syn::Stmt::Local(l) => {
+                if let Some(init) = &l.init {
+                    walk_transfer_sources(&init.expr, ix, out, seen);
+                }
+            }
+            syn::Stmt::Macro(m) => {
+                for arg in macro_exprs(&m.mac) {
+                    walk_transfer_sources(&arg, ix, out, seen);
+                }
+            }
+            syn::Stmt::Item(_) => {}
+        }
+    }
+}
+
+fn walk_transfer_sources(
+    e: &Expr,
+    ix: &NativeInstruction,
+    out: &mut Vec<(usize, bool)>,
+    seen: &mut HashSet<(usize, bool)>,
+) {
+    match e {
+        Expr::Struct(s) => {
+            let struct_name = s.path.segments.last().map(|seg| seg.ident.to_string()).unwrap_or_default();
+            if let Some((field, is_mint_field)) = transfer_source_field(&struct_name)
+                && let Some(source_field) =
+                    s.fields.iter().find(|f| matches!(&f.member, syn::Member::Named(n) if n == field))
+                && let Side::AccountField(acc, _) =
+                    resolve_side(strip_wrapper_calls(&source_field.expr), ix, &HashMap::new(), &Bundles::empty())
+                && seen.insert((acc, is_mint_field))
+            {
+                out.push((acc, is_mint_field));
+            }
+            for f in &s.fields {
+                walk_transfer_sources(&f.expr, ix, out, seen);
+            }
+        }
+        Expr::Call(c) => {
+            walk_transfer_sources(&c.func, ix, out, seen);
+            for arg in &c.args {
+                walk_transfer_sources(arg, ix, out, seen);
+            }
+        }
+        Expr::MethodCall(m) => {
+            walk_transfer_sources(&m.receiver, ix, out, seen);
+            for arg in &m.args {
+                walk_transfer_sources(arg, ix, out, seen);
+            }
+        }
+        Expr::Block(b) => collect_transfer_sources(&b.block, ix, out, seen),
+        Expr::Unsafe(u) => collect_transfer_sources(&u.block, ix, out, seen),
+        Expr::Const(c) => collect_transfer_sources(&c.block, ix, out, seen),
+        Expr::Async(a) => collect_transfer_sources(&a.block, ix, out, seen),
+        Expr::TryBlock(tb) => collect_transfer_sources(&tb.block, ix, out, seen),
+        Expr::If(i) => {
+            walk_transfer_sources(&i.cond, ix, out, seen);
+            collect_transfer_sources(&i.then_branch, ix, out, seen);
+            if let Some((_, else_expr)) = &i.else_branch {
+                walk_transfer_sources(else_expr, ix, out, seen);
+            }
+        }
+        Expr::While(w) => {
+            walk_transfer_sources(&w.cond, ix, out, seen);
+            collect_transfer_sources(&w.body, ix, out, seen);
+        }
+        Expr::Loop(l) => collect_transfer_sources(&l.body, ix, out, seen),
+        Expr::ForLoop(fl) => collect_transfer_sources(&fl.body, ix, out, seen),
+        Expr::Match(m) => {
+            walk_transfer_sources(&m.expr, ix, out, seen);
+            for arm in &m.arms {
+                if let Some((_, guard)) = &arm.guard {
+                    walk_transfer_sources(guard, ix, out, seen);
+                }
+                walk_transfer_sources(&arm.body, ix, out, seen);
+            }
+        }
+        Expr::Try(t) => walk_transfer_sources(&t.expr, ix, out, seen),
+        Expr::Paren(p) => walk_transfer_sources(&p.expr, ix, out, seen),
+        Expr::Group(g) => walk_transfer_sources(&g.expr, ix, out, seen),
+        Expr::Reference(r) => walk_transfer_sources(&r.expr, ix, out, seen),
+        Expr::RawAddr(r) => walk_transfer_sources(&r.expr, ix, out, seen),
+        Expr::Unary(u) => walk_transfer_sources(&u.expr, ix, out, seen),
+        Expr::Await(a) => walk_transfer_sources(&a.base, ix, out, seen),
+        Expr::Closure(c) => walk_transfer_sources(&c.body, ix, out, seen),
+        Expr::Binary(b) => {
+            walk_transfer_sources(&b.left, ix, out, seen);
+            walk_transfer_sources(&b.right, ix, out, seen);
+        }
+        Expr::Assign(a) => {
+            walk_transfer_sources(&a.left, ix, out, seen);
+            walk_transfer_sources(&a.right, ix, out, seen);
+        }
+        Expr::Index(i) => {
+            walk_transfer_sources(&i.expr, ix, out, seen);
+            walk_transfer_sources(&i.index, ix, out, seen);
+        }
+        Expr::Tuple(t) => {
+            for el in &t.elems {
+                walk_transfer_sources(el, ix, out, seen);
+            }
+        }
+        Expr::Array(a) => {
+            for el in &a.elems {
+                walk_transfer_sources(el, ix, out, seen);
+            }
+        }
+        Expr::Cast(c) => walk_transfer_sources(&c.expr, ix, out, seen),
+        Expr::Return(r) => {
+            if let Some(x) = &r.expr {
+                walk_transfer_sources(x, ix, out, seen);
+            }
+        }
+        Expr::Break(br) => {
+            if let Some(x) = &br.expr {
+                walk_transfer_sources(x, ix, out, seen);
+            }
+        }
+        Expr::Macro(m) => {
+            for arg in macro_exprs(&m.mac) {
+                walk_transfer_sources(&arg, ix, out, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// SAT031: flag instructions whose validation compares only caller-supplied
 /// accounts to each other. Native model first; when the workspace has no
 /// native marker but has Anchor `#[program]` modules, an Anchor fallback path
@@ -1405,8 +1675,22 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
             accounts,
         };
         let bundles = Bundles::build(&ix.accounts, &account_types, &structs);
-        let attr_roots = attr_expr_roots(&anchor.attrs);
-        findings.extend(analyze_instruction(&ix, &index, &bundles, &attr_roots));
+
+        // Handler attribute roots (`#[access_control(...)]`) plus the
+        // `#[account(constraint = ...)]` comparisons on the Accounts struct's
+        // field definitions.
+        let mut roots = attr_expr_roots(&anchor.attrs);
+        if let Some(fields) = structs.fields.get(&anchor.root_struct) {
+            for (_fname, _fty, attrs) in fields {
+                roots.extend(account_constraint_exprs(attrs));
+            }
+        }
+
+        let Some(graph) = analyze_instruction_graph(&ix, &index, &bundles, &roots) else {
+            continue;
+        };
+        findings.extend(sat031_findings(&ix, &graph));
+        findings.extend(sat033_findings(&ix, &graph));
     }
     findings
 }

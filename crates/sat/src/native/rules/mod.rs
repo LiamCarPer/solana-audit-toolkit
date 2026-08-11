@@ -1,4 +1,4 @@
-//! Native rule slices (SAT019–SAT031).
+//! Native rule slices (SAT019–SAT032).
 //!
 //! Each submodule exports `pub fn check(program: &NativeProgram, parsed:
 //! &[(syn::File, String)]) -> Vec<Finding>` and owns its fixtures + tests:
@@ -6,12 +6,14 @@
 //! - `pda_cei`   — SAT022 Seed Derivation Mismatch / SAT023 State Write After CPI
 //! - `lifecycle` — SAT024 Account Reinit After Close / SAT025 Unchecked Deserialization / SAT026 Unsafe Arithmetic / SAT027 Writable Builtin Account
 //! - `cpi`       — SAT028 Token CPI Unverified Authority / SAT029 Self-Invocation / SAT030 Cross-Instruction State Reuse
-//! - `validate`  — SAT031 Self-Referential Validation (Cashio class)
+//! - `validate`  — SAT031 Self-Referential Validation (Cashio class) + SAT033 Unanchored Token Mint
+//! - `state_creation` — SAT032 Permissionless State Creation (Anchor path; the `new_bank` half of Cashio)
 
 pub mod auth;
 pub mod cpi;
 pub mod lifecycle;
 pub mod pda_cei;
+pub mod state_creation;
 pub mod validate;
 
 use crate::native::model::NativeProgram;
