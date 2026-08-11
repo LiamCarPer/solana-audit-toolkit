@@ -52,42 +52,28 @@ pub fn detect_token2022_in_source(
             program_id_locations.push(file_path.clone());
         }
 
-        for item in &file.items {
-            if let syn::Item::Mod(item_mod) = item
-                && let Some((_, items)) = &item_mod.content
-            {
-                for mod_item in items {
-                    if let syn::Item::Fn(func) = mod_item
-                        && matches!(func.vis, syn::Visibility::Public(_))
-                    {
-                        let body_source = extract_body_source(&source, func);
-                        let has_token2022_transfer = body_source.to_lowercase().contains("token_2022")
-                            || body_source.contains("TokenzQd")
-                            || body_source.to_lowercase().contains("spl_token_2022");
-
-                        if has_token2022_transfer {
-                            found_token2022_usage = true;
-                            token2022_transfer_instructions.push((
-                                func.sig.ident.to_string(),
-                                body_source.clone(),
-                                file_path.clone(),
-                            ));
-                        }
-
-                        let has_interface_account = {
-                            let lower = body_source.to_lowercase();
-                            lower.contains("interfaceaccount<")
-                                && (lower.contains("tokenaccount") || lower.contains("mint"))
-                        };
-
-                        if has_interface_account {
-                            found_token2022_usage = true;
-                            interface_account_locations.push(format!("{}:{}", file_path, func.sig.ident));
-                        }
-                    }
-                }
-            }
+        // Raw-source marker scan: catches Token-2022 references outside fn
+        // bodies (file-level `use` statements, trait imports, type aliases,
+        // macro invocations, etc.). The `TokenzQd...` program ID literal does
+        // not contain `token_2022`, so program-ID-only files are not
+        // misclassified as usage here; `spl_token_2022_interface` legitimately
+        // contains the `token_2022` substring and is a real usage signal.
+        let source_lower = source.to_lowercase();
+        if source_lower.contains("spl_token_2022") || source_lower.contains("token_2022") {
+            found_token2022_usage = true;
         }
+
+        // Recursive fn-body scan: walk every `Item::Fn` wherever it lives
+        // (file scope, modules, impl blocks, trait bodies) regardless of
+        // visibility. The previous scan only visited `pub` fns directly
+        // inside module items, missing `impl`-block methods entirely.
+        scan_file_items(
+            &file.items,
+            file_path,
+            &mut found_token2022_usage,
+            &mut interface_account_locations,
+            &mut token2022_transfer_instructions,
+        );
     }
 
     if found_program_id {
@@ -118,9 +104,131 @@ pub fn detect_token2022_in_source(
     (found_program_id || found_token2022_usage, findings, token2022_transfer_instructions)
 }
 
-fn extract_body_source(_file_source: &str, func: &syn::ItemFn) -> String {
-    let block = &func.block;
-    quote!(#block).to_string()
+/// Recursively visit every function body reachable from file-level items:
+/// free fns, module members (including nested modules), `impl` blocks, and
+/// trait default methods. Visibility is irrelevant for usage detection.
+fn scan_file_items(
+    items: &[syn::Item],
+    file_path: &str,
+    found_token2022_usage: &mut bool,
+    interface_account_locations: &mut Vec<String>,
+    token2022_transfer_instructions: &mut Vec<(String, String, String)>,
+) {
+    for item in items {
+        match item {
+            syn::Item::Fn(func) => scan_fn_body(
+                &func.block,
+                &func.sig.ident.to_string(),
+                file_path,
+                found_token2022_usage,
+                interface_account_locations,
+                token2022_transfer_instructions,
+            ),
+            syn::Item::Mod(item_mod) => {
+                if let Some((_, items)) = &item_mod.content {
+                    scan_file_items(
+                        items,
+                        file_path,
+                        found_token2022_usage,
+                        interface_account_locations,
+                        token2022_transfer_instructions,
+                    );
+                }
+            }
+            syn::Item::Impl(item_impl) => scan_impl_items(
+                &item_impl.items,
+                file_path,
+                found_token2022_usage,
+                interface_account_locations,
+                token2022_transfer_instructions,
+            ),
+            syn::Item::Trait(item_trait) => scan_trait_items(
+                &item_trait.items,
+                file_path,
+                found_token2022_usage,
+                interface_account_locations,
+                token2022_transfer_instructions,
+            ),
+            _ => {}
+        }
+    }
+}
+
+/// Visit every function body inside an `impl` block (e.g. `impl Processor`).
+fn scan_impl_items(
+    items: &[syn::ImplItem],
+    file_path: &str,
+    found_token2022_usage: &mut bool,
+    interface_account_locations: &mut Vec<String>,
+    token2022_transfer_instructions: &mut Vec<(String, String, String)>,
+) {
+    for item in items {
+        if let syn::ImplItem::Fn(func) = item {
+            scan_fn_body(
+                &func.block,
+                &func.sig.ident.to_string(),
+                file_path,
+                found_token2022_usage,
+                interface_account_locations,
+                token2022_transfer_instructions,
+            );
+        }
+    }
+}
+
+/// Visit every function body inside a trait definition (default methods).
+fn scan_trait_items(
+    items: &[syn::TraitItem],
+    file_path: &str,
+    found_token2022_usage: &mut bool,
+    interface_account_locations: &mut Vec<String>,
+    token2022_transfer_instructions: &mut Vec<(String, String, String)>,
+) {
+    for item in items {
+        if let syn::TraitItem::Fn(func) = item
+            && let Some(block) = &func.default
+        {
+            scan_fn_body(
+                block,
+                &func.sig.ident.to_string(),
+                file_path,
+                found_token2022_usage,
+                interface_account_locations,
+                token2022_transfer_instructions,
+            );
+        }
+    }
+}
+
+/// Scan a single function body for Token-2022 usage markers and
+/// interface-account references.
+fn scan_fn_body(
+    block: &syn::Block,
+    func_name: &str,
+    file_path: &str,
+    found_token2022_usage: &mut bool,
+    interface_account_locations: &mut Vec<String>,
+    token2022_transfer_instructions: &mut Vec<(String, String, String)>,
+) {
+    let body_source = quote!(#block).to_string();
+    let has_token2022_transfer = body_source.to_lowercase().contains("token_2022")
+        || body_source.contains("TokenzQd")
+        || body_source.to_lowercase().contains("spl_token_2022");
+
+    if has_token2022_transfer {
+        *found_token2022_usage = true;
+        token2022_transfer_instructions.push((func_name.to_string(), body_source.clone(), file_path.to_string()));
+    }
+
+    let has_interface_account = {
+        let lower = body_source.to_lowercase();
+        lower.contains("interfaceaccount<") && (lower.contains("tokenaccount") || lower.contains("mint"))
+    };
+
+    if has_interface_account {
+        *found_token2022_usage = true;
+        interface_account_locations.push(format!("{file_path}:{func_name}"));
+    }
 }
 
 // ── Account type detection ────────────────────────────────────────────────────

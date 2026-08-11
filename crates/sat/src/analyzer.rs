@@ -788,6 +788,14 @@ fn check_reinit_risk(accounts: &[AccountsStruct], instructions: &[SourceInstruct
             continue;
         }
 
+        // An Accounts struct with no `#[account(init)]` field anywhere performs
+        // no Anchor initialization at all, so there is nothing an attacker could
+        // re-initialize. The name-based heuristic alone (e.g. `CreateCanonicalStake`,
+        // whose accounts are created via a stake-program CPI) must not fire.
+        if !accts.fields.iter().any(|field| field.has_init) {
+            continue;
+        }
+
         for field in &accts.fields {
             if field.has_mut
                 && !field.has_init

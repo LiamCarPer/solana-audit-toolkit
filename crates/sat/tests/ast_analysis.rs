@@ -413,6 +413,68 @@ fn test_fixture_clean_produces_no_false_positives() {
 }
 
 #[test]
+fn test_reinit_risk_skipped_when_struct_has_no_init_fields() {
+    use std::fs;
+    // Mirrors Marinade `CreateCanonicalStake`: name matches the init/create
+    // heuristic and fields are `mut`-without-`init`, but the struct performs
+    // no Anchor initialization at all (no `#[account(init)]` field anywhere).
+    let path = "tests/fixtures_ast/clean/reinit_no_init_fields.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (accounts, instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    let accts = accounts.iter().find(|a| a.name == "CreateCanonicalStake").expect("fixture should parse the struct");
+    assert!(
+        accts.fields.iter().all(|f| !f.has_init),
+        "clean fixture must have zero init fields (nothing to re-initialize)"
+    );
+    assert!(
+        instructions.iter().any(|i| i.name == "create_canonical_stake"),
+        "fixture should declare a create_* instruction"
+    );
+    assert!(
+        accts.fields.iter().any(|f| f.has_mut && !f.has_init),
+        "clean fixture must still exercise mut-without-init fields"
+    );
+
+    let reinit: Vec<_> = findings.iter().filter(|f| f.title.contains("Reinitialization Risk")).collect();
+    assert!(
+        reinit.is_empty(),
+        "struct with no init fields cannot have a reinit risk; got: {:?}",
+        reinit.iter().map(|f| &f.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_reinit_risk_still_fires_when_struct_has_init_field() {
+    use std::fs;
+    // Control: the struct DOES perform Anchor initialization (`config` has
+    // `#[account(init)]`), so a second sensitive `mut`-without-`init` field
+    // (`state`) must still be flagged.
+    let path = "tests/fixtures_ast/vulnerable/reinit_init_with_sensitive_mut.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    let accts = accounts.iter().find(|a| a.name == "CreateConfig").expect("fixture should parse the struct");
+    assert!(
+        accts.fields.iter().any(|f| f.has_init),
+        "control fixture must have an init field to anchor the reinit risk"
+    );
+
+    let reinit: Vec<_> = findings.iter().filter(|f| f.title.contains("Reinitialization Risk")).collect();
+    assert!(
+        reinit.iter().any(|f| f.title.contains("CreateConfig::state")),
+        "mut-without-init sensitive field in an init-bearing struct must still be flagged; got: {:?}",
+        reinit.iter().map(|f| &f.title).collect::<Vec<_>>()
+    );
+    assert_eq!(reinit.len(), 1, "exactly the non-init sensitive field should be flagged");
+    assert_eq!(reinit[0].severity, Severity::High);
+    assert!(
+        !reinit.iter().any(|f| f.title.contains("CreateConfig::config")),
+        "the init-bearing field itself must not be flagged"
+    );
+}
+
+#[test]
 fn test_fixture_sysvar_issues_parses() {
     use std::fs;
     let path = "tests/fixtures_ast/vulnerable/sysvar_issues.rs";
@@ -422,16 +484,46 @@ fn test_fixture_sysvar_issues_parses() {
     assert!(!accounts.is_empty(), "sysvar fixture should parse and find Accounts structs");
     let get_time = accounts.iter().find(|a| a.name == "GetTime").unwrap();
     assert!(get_time.fields.iter().any(|f| f.name == "authority"));
+    let pass_clock = accounts.iter().find(|a| a.name == "PassClock").unwrap();
+    assert!(pass_clock.fields.iter().any(|f| f.name == "authority"));
+    assert!(
+        !pass_clock.fields.iter().any(|f| f.name == "clock"),
+        "control fixture must reference `clock` without declaring it"
+    );
 
     let missing_sysvar: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Sysvar")).collect();
     assert!(
         missing_sysvar.iter().any(|f| f.title.contains("Clock")),
-        "Clock::get() without a declared clock sysvar should be flagged"
+        "non-accessor reference `ctx.accounts.clock` without a declared clock sysvar should be flagged"
     );
     assert!(
         !missing_sysvar.iter().any(|f| f.title.contains("Rent")),
         "Rent::get() must not be flagged because UseRent declares `rent: Sysvar<'info, Rent>`"
     );
+}
+
+#[test]
+fn test_fixture_sysvar_accessor_only_no_false_positive() {
+    use std::fs;
+    let path = "tests/fixtures_ast/clean/sysvar_accessor_only.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let (accounts, _instructions, findings) = sat::analyzer::analyze_string_for_test(&source);
+
+    assert!(!accounts.is_empty(), "accessor-only fixture should parse and find Accounts structs");
+    assert!(
+        accounts.iter().all(|a| a.fields.iter().all(|f| f.name != "clock" && f.name != "rent")),
+        "accessor-only fixture must not declare any sysvar field"
+    );
+
+    let missing_sysvar: Vec<_> = findings.iter().filter(|f| f.title.contains("Missing Sysvar")).collect();
+    assert!(
+        missing_sysvar.is_empty(),
+        "Clock::get() / sysvar::clock::Clock::get() accessor calls need no declared \
+         clock account (Jito tip-distribution shape); got: {missing_sysvar:?}"
+    );
+
+    let writable_sysvar: Vec<_> = findings.iter().filter(|f| f.title.contains("Writable Sysvar")).collect();
+    assert!(writable_sysvar.is_empty(), "accessor-only fixture should have no writable sysvar findings");
 }
 
 #[test]
@@ -1027,6 +1119,67 @@ fn test_token2022_fixture_detects_fee_bypass_and_interfaces() {
 
     let interface: Vec<_> = findings.iter().filter(|f| f.title.contains("Token-2022 InterfaceAccount")).collect();
     assert_eq!(interface.len(), 3, "from/to/mint are InterfaceAccount fields");
+}
+
+#[test]
+fn test_token2022_impl_method_usage_no_false_negative() {
+    use std::fs;
+
+    let path = "tests/fixtures_ast/clean/token2022_impl_usage.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let parsed = syn::parse_file(&source).unwrap();
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let parsed_files = vec![(parsed, path.to_string())];
+
+    let findings = sat::token2022::analyze(std::path::Path::new("tests/fixtures_ast/clean"), &parsed_files, &accounts);
+
+    let negative: Vec<_> = findings.iter().filter(|f| f.title.contains("No Token-2022 Usage Detected")).collect();
+    assert!(
+        negative.is_empty(),
+        "impl-block spl_token_2022_interface usage must not produce the false negative: {findings:#?}"
+    );
+}
+
+#[test]
+fn test_token2022_import_only_usage_no_false_negative() {
+    use std::fs;
+
+    let path = "tests/fixtures_ast/clean/token2022_import_only.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let parsed = syn::parse_file(&source).unwrap();
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let parsed_files = vec![(parsed, path.to_string())];
+
+    let findings = sat::token2022::analyze(std::path::Path::new("tests/fixtures_ast/clean"), &parsed_files, &accounts);
+
+    let negative: Vec<_> = findings.iter().filter(|f| f.title.contains("No Token-2022 Usage Detected")).collect();
+    assert!(
+        negative.is_empty(),
+        "file-level `use spl_token_2022_interface::...` must not produce the false negative: {findings:#?}"
+    );
+}
+
+#[test]
+fn test_token2022_control_fixture_keeps_negative_signal() {
+    use std::fs;
+
+    let path = "tests/fixtures_ast/clean/token2022_control.rs";
+    let source = fs::read_to_string(path).unwrap();
+    let parsed = syn::parse_file(&source).unwrap();
+
+    let (accounts, _instructions, _findings) = sat::analyzer::analyze_string_for_test(&source);
+    let parsed_files = vec![(parsed, path.to_string())];
+
+    let findings = sat::token2022::analyze(std::path::Path::new("tests/fixtures_ast/clean"), &parsed_files, &accounts);
+
+    let negative: Vec<_> = findings.iter().filter(|f| f.title.contains("No Token-2022 Usage Detected")).collect();
+    assert_eq!(
+        negative.len(),
+        1,
+        "spl_token_interface-only program must still report the negative signal: {findings:#?}"
+    );
 }
 
 #[test]
