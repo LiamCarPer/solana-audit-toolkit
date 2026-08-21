@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod analyzer;
 mod audit;
+mod calibrate;
 mod cpi;
 mod deserialization;
 mod fuzzer;
@@ -78,6 +79,14 @@ enum Commands {
         #[arg(long, default_value = ".sat-watch")]
         out_dir: String,
     },
+    /// Calibrate rule precision over a corpus of live programs
+    Calibrate {
+        /// Corpus configuration JSON (same shape as `watch`)
+        config: String,
+        /// Output precision report
+        #[arg(long, default_value = "precision.md")]
+        out: String,
+    },
     /// Generate Kani formal-verification scaffolding
     Verify {
         #[command(subcommand)]
@@ -120,6 +129,9 @@ enum AnalyzeTarget {
         /// Export source-derived native account expectations to a JSON file (consumable by rts)
         #[arg(long)]
         expectations: Option<String>,
+        /// Filter confirmed-FP findings from a `sat calibrate` suppression export
+        #[arg(long)]
+        fp_suppressions: Option<String>,
     },
 }
 
@@ -149,9 +161,14 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Analyze { target } => match target {
             AnalyzeTarget::Idl { path } => idl::run(path.as_deref()),
-            AnalyzeTarget::Src { path, format, triage, tx_report, expectations } => {
-                analyzer::run(path.as_deref(), &format, triage, tx_report.as_deref(), expectations.as_deref())
-            }
+            AnalyzeTarget::Src { path, format, triage, tx_report, expectations, fp_suppressions } => analyzer::run(
+                path.as_deref(),
+                &format,
+                triage,
+                tx_report.as_deref(),
+                expectations.as_deref(),
+                fp_suppressions.as_deref(),
+            ),
         },
         Commands::Fuzz { action } => match action {
             FuzzAction::Init => fuzzer::init(),
@@ -162,6 +179,7 @@ fn main() -> Result<()> {
         },
         Commands::Audit { path, out, tx_report } => audit::run(path.as_deref(), Some(&out), tx_report.as_deref()),
         Commands::Watch { config, out_dir } => watch::run(&config, &out_dir),
+        Commands::Calibrate { config, out } => calibrate::run(&config, Some(&out)),
         Commands::Verify { action } => match action {
             VerifyAction::Init => verify::init(),
         },

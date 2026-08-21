@@ -165,7 +165,8 @@ fn load_state(path: &Path) -> ScanState {
 
 /// Resolves the repo root: clones a remote repo when a url is configured,
 /// otherwise uses the local path (absolute override or `<base_dir>/<name>`).
-fn ensure_repo(repo: &WatchRepo, base_dir: &Path, out_dir: &Path) -> Result<PathBuf> {
+/// Shared with the calibration harness (`calibrate`).
+pub(crate) fn ensure_repo(repo: &WatchRepo, base_dir: &Path, out_dir: &Path) -> Result<PathBuf> {
     if let Some(url) = &repo.url {
         let repos_dir = out_dir.join("repos");
         let clone_dir = repos_dir.join(&repo.name);

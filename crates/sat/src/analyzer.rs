@@ -1544,6 +1544,7 @@ pub fn run(
     triage: bool,
     tx_report: Option<&str>,
     expectations: Option<&str>,
+    fp_suppressions: Option<&str>,
 ) -> Result<()> {
     ui::print_banner();
 
@@ -1562,7 +1563,11 @@ pub fn run(
         ui::print_notice(&format!("Transaction report: {report}"));
     }
 
-    let output = collect(path, tx_report, expectations)?;
+    let mut output = collect(path, tx_report, expectations)?;
+
+    if let Some(supp_path) = fp_suppressions {
+        crate::calibrate::apply_suppressions(&mut output.findings, supp_path, &src_path.to_string_lossy())?;
+    }
 
     if output.parsed_files.is_empty() {
         ui::print_warning("No Rust source files found. Is this an Anchor workspace?");
