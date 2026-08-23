@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod accounting;
 mod analyzer;
 mod audit;
 mod calibrate;
@@ -82,6 +83,11 @@ enum Commands {
     },
     /// Run the validation-completeness (taint) engine over a native program
     Taint {
+        /// Path to the source directory or file (same as `analyze src`)
+        path: Option<String>,
+    },
+    /// Simulate token-accounting drift over a native program
+    Accounting {
         /// Path to the source directory or file (same as `analyze src`)
         path: Option<String>,
     },
@@ -186,6 +192,7 @@ fn main() -> Result<()> {
         Commands::Audit { path, out, tx_report } => audit::run(path.as_deref(), Some(&out), tx_report.as_deref()),
         Commands::Watch { config, out_dir } => watch::run(&config, &out_dir),
         Commands::Taint { path } => taint::run(path.as_deref()),
+        Commands::Accounting { path } => accounting::run(path.as_deref()),
         Commands::Calibrate { config, out } => calibrate::run(&config, Some(&out)),
         Commands::Verify { action } => match action {
             VerifyAction::Init => verify::init(),

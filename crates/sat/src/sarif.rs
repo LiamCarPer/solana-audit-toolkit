@@ -183,6 +183,11 @@ const RULES: &[(&str, &str, &str)] = &[
         "Unvalidated Flow",
         "Attacker-influenced values flow into privileged sinks with no anchoring validation on any path.",
     ),
+    (
+        "SAT039",
+        "Accounting Drift",
+        "Internal ledger updates diverge from actual token-program balance deltas (fee-on-transfer, hooks, stale reads).",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -289,6 +294,8 @@ pub(crate) fn classify_finding_rule(finding: &Finding) -> String {
         "SAT037".to_string()
     } else if finding.title.contains("Unvalidated Flow") {
         "SAT038".to_string()
+    } else if finding.title.contains("Accounting Drift") {
+        "SAT039".to_string()
     } else if finding.title.contains("Self-Referential Validation") {
         "SAT031".to_string()
     } else if finding.title.contains("Permissionless State Creation") {
