@@ -20,6 +20,7 @@ mod reporter;
 mod sarif;
 mod serialization;
 mod sysvar;
+mod taint;
 mod token2022;
 mod token_cpi;
 mod tx_report;
@@ -78,6 +79,11 @@ enum Commands {
         /// Directory for scan state and clones
         #[arg(long, default_value = ".sat-watch")]
         out_dir: String,
+    },
+    /// Run the validation-completeness (taint) engine over a native program
+    Taint {
+        /// Path to the source directory or file (same as `analyze src`)
+        path: Option<String>,
     },
     /// Calibrate rule precision over a corpus of live programs
     Calibrate {
@@ -179,6 +185,7 @@ fn main() -> Result<()> {
         },
         Commands::Audit { path, out, tx_report } => audit::run(path.as_deref(), Some(&out), tx_report.as_deref()),
         Commands::Watch { config, out_dir } => watch::run(&config, &out_dir),
+        Commands::Taint { path } => taint::run(path.as_deref()),
         Commands::Calibrate { config, out } => calibrate::run(&config, Some(&out)),
         Commands::Verify { action } => match action {
             VerifyAction::Init => verify::init(),

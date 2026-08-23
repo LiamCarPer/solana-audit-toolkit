@@ -83,23 +83,22 @@ const EQUALITY_MACROS: &[&str] = &[
 const OWNER_CHECK_CALLS: &[&str] = &["check_owner", "assert_owned_by", "check_owned_by", "assert_owner"];
 
 /// A resolved side of a comparison.
-#[derive(Clone)]
-enum Side {
+#[derive(Clone, Debug)]
+pub enum Side {
     /// A literal, constant, or the program id — canonical by construction.
     Anchor,
-    /// A field of a resolved account: `(account_index, field)`. The empty
-    /// field marks a bare account expression (its pubkey identity).
+    /// A field of a resolved account: `(account_index, field)`.
     AccountField(usize, String),
     /// Unresolvable — neither an anchor nor an account field.
     Unknown,
 }
 
 /// One equality comparison with its resolved sides and graph nodes.
-struct Comparison {
-    left: Side,
-    right: Side,
-    left_node: Option<(usize, String)>,
-    right_node: Option<(usize, String)>,
+pub struct Comparison {
+    pub left: Side,
+    pub right: Side,
+    pub left_node: Option<(usize, String)>,
+    pub right_node: Option<(usize, String)>,
 }
 
 // ── Function + struct index over the parsed files ───────────────────────────
@@ -993,7 +992,7 @@ pub fn collect_blocks_scoped<'a>(
 
 /// Accounts treated as canonical from the start: sysvars, program and
 /// system-program accounts, and literal-seed PDAs.
-fn seed_canonical(ix: &NativeInstruction) -> HashSet<usize> {
+pub(crate) fn seed_canonical(ix: &NativeInstruction) -> HashSet<usize> {
     let mut out = HashSet::new();
     for (i, acc) in ix.accounts.iter().enumerate() {
         let builtin = matches!(acc.kind, AccountKind::Sysvar | AccountKind::Program | AccountKind::SystemProgram);
@@ -1208,7 +1207,7 @@ fn account_of_expr(e: &Expr, ix: &NativeInstruction) -> Option<usize> {
 /// compared against an anchor (constant / program id) or against the key of an
 /// already-canonical account, since that pins the account's identity and makes
 /// its data program-controlled. Iterates until stable (bounded).
-fn reachable_canonical(comparisons: &[Comparison], seeded: HashSet<usize>) -> HashSet<usize> {
+pub(crate) fn reachable_canonical(comparisons: &[Comparison], seeded: HashSet<usize>) -> HashSet<usize> {
     let mut canonical = seeded;
     for _ in 0..8 {
         let mut changed = false;
@@ -1479,13 +1478,13 @@ pub fn account_constraint_exprs(attrs: &[syn::Attribute]) -> Vec<Expr> {
 /// helper blocks, the equality comparisons, and the reachable canonical
 /// accounts. Shared by the SAT031 chain detection and the SAT033
 /// unanchored-token-mint check.
-struct InstructionGraph<'a> {
-    blocks: Vec<&'a syn::Block>,
-    comparisons: Vec<Comparison>,
-    canonical: HashSet<usize>,
+pub struct InstructionGraph<'a> {
+    pub blocks: Vec<&'a syn::Block>,
+    pub comparisons: Vec<Comparison>,
+    pub canonical: HashSet<usize>,
 }
 
-fn analyze_instruction_graph<'a>(
+pub fn analyze_instruction_graph<'a>(
     ix: &NativeInstruction,
     index: &'a FnIndex<'a>,
     bundles: &Bundles,

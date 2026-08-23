@@ -17,6 +17,7 @@ pub mod reporter;
 pub mod sarif;
 pub mod serialization;
 pub mod sysvar;
+pub mod taint;
 pub mod token2022;
 pub mod token_cpi;
 pub mod tx_report;

@@ -178,6 +178,11 @@ const RULES: &[(&str, &str, &str)] = &[
         "Sysvar-Introspection Misuse",
         "Unchecked sysvar introspection parses caller-supplied account data without a sysvar address check.",
     ),
+    (
+        "SAT038",
+        "Unvalidated Flow",
+        "Attacker-influenced values flow into privileged sinks with no anchoring validation on any path.",
+    ),
 ];
 
 /// Extracts the artifact URI and line number from a `Finding::location` string.
@@ -282,6 +287,8 @@ pub(crate) fn classify_finding_rule(finding: &Finding) -> String {
     // (SAT009): the title contains the substring "Sysvar".
     if finding.title.contains("Sysvar-Introspection") {
         "SAT037".to_string()
+    } else if finding.title.contains("Unvalidated Flow") {
+        "SAT038".to_string()
     } else if finding.title.contains("Self-Referential Validation") {
         "SAT031".to_string()
     } else if finding.title.contains("Permissionless State Creation") {
