@@ -115,9 +115,7 @@ fn test_e2e_clean_fixtures_produce_no_native_findings() {
         "oracle/clean.rs",
     ] {
         let (_program, mut findings) = analyze_fixture(rel);
-        findings.retain(|f| {
-            !f.title.starts_with("Unvalidated Flow:") && !f.title.starts_with("Accounting Drift:")
-        });
+        findings.retain(|f| !f.title.starts_with("Unvalidated Flow:") && !f.title.starts_with("Accounting Drift:"));
         assert!(
             findings.is_empty(),
             "clean fixture {rel} should produce zero native findings, got: {:?}",
