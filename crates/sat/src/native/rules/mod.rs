@@ -32,6 +32,7 @@ pub fn run(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Findi
     findings.extend(cpi::check(program, parsed));
     findings.extend(validate::check(program, parsed));
     findings.extend(oracle::check(program, parsed));
+    findings.extend(crate::taint::check(program, parsed));
     findings.extend(sysvar_introspection::check(parsed));
     findings
 }
