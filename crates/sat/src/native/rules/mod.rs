@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod cpi;
+pub mod known_validators;
 pub mod lifecycle;
 pub mod oracle;
 pub mod pda_cei;

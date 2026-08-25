@@ -488,6 +488,17 @@ fn analyze_instruction(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<
     }
 
     let mut flows = Vec::new();
+
+    // Known-validator recognition: external-crate helpers (load_signer,
+    // check_admin, …) that prove validation on specific accounts. Sources
+    // validated this way are removed from the unanchored source set.
+    let validated_by_helpers = crate::native::rules::known_validators::scan_known_validators(&graph.blocks, ix);
+    let helper_validated: HashSet<usize> = validated_by_helpers.iter().map(|(_, idx)| *idx).collect();
+    state.sources.retain(|i| !helper_validated.contains(i));
+    if state.sources.is_empty() {
+        return Vec::new();
+    }
+
     for block in &graph.blocks {
         scan_block(block, ix, &mut state, &mut flows);
     }
