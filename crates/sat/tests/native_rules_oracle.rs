@@ -354,3 +354,79 @@ mod pyth_client {
     assert!(by_rule(&findings, SAT035).is_empty(), "conf consumed → confidence silent");
     assert!(by_rule(&findings, SAT036).is_empty(), "expo consumed → exponent silent");
 }
+
+// ── Anchor helper-call pattern (get_oracle_price) ─────────────────────────────
+
+#[allow(dead_code)]
+struct OraclePriceData {
+    price: i64,
+    conf: u64,
+    delay: i64,
+    exponent: i32,
+}
+
+#[allow(dead_code)]
+fn get_oracle_price(_source: &u8, _price_oracle: &(), _slot: u64) -> OraclePriceData {
+    OraclePriceData { price: 0, conf: 0, delay: 0, exponent: 0 }
+}
+
+/// An Anchor instruction that reads a feed only via a `get_oracle_price`
+/// helper (data flows through the returned struct), consumes confidence,
+/// delay, and exponent — the oracle rules must stay silent (no STA/conf/expo
+/// finding). Guards the helper-call recognition in the oracle access collector.
+#[test]
+fn anchor_oracle_helper_consumes_time_conf_expo() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod m {
+    use super::*;
+    pub fn set_price(ctx: Context<SetPrice>) -> Result<()> {
+        let d = get_oracle_price(&1u8, &ctx.accounts.oracle, Clock::get()?.slot);
+        let _conf = d.conf;
+        let _delay = d.delay;
+        let _expo = d.exponent;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct SetPrice<'info> {
+    pub oracle: AccountInfo<'info>,
+}
+"#;
+    let (_, findings) = run(source);
+    assert!(by_rule(&findings, SAT034).is_empty(), "time/delay consumed → staleness must be silent: {findings:#?}");
+    assert!(by_rule(&findings, SAT035).is_empty(), "confidence consumed → silent");
+    assert!(by_rule(&findings, SAT036).is_empty(), "exponent consumed → silent");
+}
+
+/// Anchor instruction that reads a feed only via `get_oracle_price` but never
+/// consumes time/confidence/exponent — all three oracle rules must fire.
+#[test]
+fn anchor_oracle_helper_read_no_members_consumed() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod m {
+    use super::*;
+    pub fn set_price(ctx: Context<SetPrice>) -> Result<()> {
+        let d = get_oracle_price(&1u8, &ctx.accounts.oracle, Clock::get()?.slot);
+        let _p = d.price;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct SetPrice<'info> {
+    pub oracle: AccountInfo<'info>,
+}
+"#;
+    let (_, findings) = run(source);
+    // `price` alone is not a time/conf/expo bound → all three fire.
+    assert_eq!(by_rule(&findings, SAT034).len(), 1, "staleness fires: {findings:#?}");
+    assert_eq!(by_rule(&findings, SAT035).len(), 1, "confidence fires: {findings:#?}");
+    assert_eq!(by_rule(&findings, SAT036).len(), 1, "exponent fires: {findings:#?}");
+}

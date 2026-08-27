@@ -51,8 +51,16 @@ fn is_feed_named(name: &str) -> bool {
 }
 
 /// Time fields whose consumption enables a staleness bound.
-const TIME_FIELDS: &[&str] =
-    &["publish_time", "last_updated", "last_updated_time", "latest_price_time", "timestamp", "publish_time_seconds"];
+const TIME_FIELDS: &[&str] = &[
+    "publish_time",
+    "last_updated",
+    "last_updated_time",
+    "latest_price_time",
+    "timestamp",
+    "publish_time_seconds",
+    "delay",
+    "get_delay",
+];
 
 /// Confidence fields whose consumption enables a quality bound.
 const CONFIDENCE_FIELDS: &[&str] = &["conf", "confidence", "confidence_interval"];
@@ -118,12 +126,29 @@ fn scan_block_accesses(
                     // `let p = Price::try_from_slice(&feed.data.borrow())?;` /
                     // `let price = pyth_client::load_price(&data).unwrap();` /
                     // `let data = feed.try_borrow_data()?;` — taint the local
-                    // with the feed account the bytes come from.
+                    // with the feed account the bytes come from. Also handle
+                    // oracle helpers: `let o = get_oracle_price(&src, &feed, slot)?;`
+                    let source = deser_source_account(init_expr, ix, aliases)
+                        .or_else(|| borrow_source_account(init_expr, ix, aliases))
+                        .or_else(|| oracle_price_source_account(init_expr, ix, aliases));
                     if let syn::Pat::Ident(pi) = &l.pat
-                        && let Some(acc) = deser_source_account(init_expr, ix, aliases)
-                            .or_else(|| borrow_source_account(init_expr, ix, aliases))
+                        && let Some(acc) = source
                     {
                         aliases.insert(pi.ident.to_string(), acc);
+                    } else if let syn::Pat::Struct(ps) = &l.pat
+                        && let Some(acc) = source
+                    {
+                        // `let OraclePriceData { price, .. } = get_oracle_price(..)?;`
+                        // — bind each bound member as a payload read on the feed,
+                        // and alias the local so later `.price` uses resolve.
+                        for field in &ps.fields {
+                            if let syn::Member::Named(ident) = &field.member {
+                                collector.record(acc, &ident.to_string());
+                                if let syn::Pat::Ident(pi) = &*field.pat {
+                                    aliases.insert(pi.ident.to_string(), acc);
+                                }
+                            }
+                        }
                     }
                     scan_expr_accesses(init_expr, ix, aliases, collector);
                 }
@@ -162,7 +187,13 @@ fn scan_expr_accesses(
                 members.push(member_name(&inner.member));
                 base = &inner.base;
             }
-            if let Some(acc) = base_account(base, ix, aliases) {
+            // Resolve the base across the three shapes: the peeled base path
+            // (a local alias like `price_account`), the un-peeled field base
+            // (`ctx.accounts.oracle` / `self.oracle`), then the whole field.
+            let acc = base_account(base, ix, aliases)
+                .or_else(|| base_account(&f.base, ix, aliases))
+                .or_else(|| base_account(e, ix, aliases));
+            if let Some(acc) = acc {
                 for member in &members {
                     collector.record(acc, member);
                 }
@@ -170,6 +201,12 @@ fn scan_expr_accesses(
             scan_expr_accesses(&f.base, ix, aliases, collector);
         }
         Expr::Call(c) => {
+            // An oracle-helper call consumes a price feed even when its result
+            // is not bound to a local (`get_oracle_price(&src, &feed, slot)?`
+            // used directly). Mark the payload read here.
+            if let Some(acc) = oracle_price_source_account(e, ix, aliases) {
+                collector.record(acc, "payload");
+            }
             scan_expr_accesses(&c.func, ix, aliases, collector);
             for arg in &c.args {
                 scan_expr_accesses(arg, ix, aliases, collector);
@@ -346,6 +383,65 @@ fn deser_source_account(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<S
     account_in_expr(first, ix, aliases)
 }
 
+/// Oracle-price helper calls: `get_oracle_price(&source, &feed, slot)`,
+/// `get_pyth_price(&feed, slot)`, `get_oracle_price_data(&feed, ...)`.
+/// These read price/time/confidence data from a price-feed account and return
+/// a struct (or tuple) whose members the caller consumes. The feed account is
+/// the *second* argument (index 1) — argument 0 is the `OracleSource` enum.
+fn oracle_price_helper_name(name: &str) -> bool {
+    matches!(
+        name,
+        "get_oracle_price"
+            | "get_oracle_price_data"
+            | "get_pyth_price"
+            | "get_pyth_stable_coin_price"
+            | "get_switchboard_price"
+            | "get_sb_on_demand_price"
+            | "get_prelaunch_price"
+            | "get_price_feed"
+            | "oracle_price"
+    )
+}
+
+/// Resolve the price-feed account an oracle-helper call reads from.
+/// `get_oracle_price(&oracle_source, &ctx.accounts.oracle, clock.slot)` →
+/// the `oracle` account index. First looks at the feed-shaped argument
+/// (index 1 for `get_oracle_price`-style, index 0 otherwise).
+fn oracle_price_source_account(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<String, usize>) -> Option<usize> {
+    let call = match expr {
+        Expr::Call(c) => c,
+        Expr::Try(t) => return oracle_price_source_account(&t.expr, ix, aliases),
+        Expr::Paren(p) => return oracle_price_source_account(&p.expr, ix, aliases),
+        Expr::MethodCall(m) if matches!(m.method.to_string().as_str(), "unwrap" | "expect") => {
+            return oracle_price_source_account(&m.receiver, ix, aliases);
+        }
+        _ => return None,
+    };
+    let name = match &*call.func {
+        Expr::Path(p) => p.path.segments.last()?.ident.to_string(),
+        _ => return None,
+    };
+    if !oracle_price_helper_name(&name) {
+        return None;
+    }
+    // Feed-shaped args: pass `&ctx.accounts.oracle` / `price_oracle` /
+    // `&feed` / `&oracle`. Prefer a `&AccountInfo`-style reference to a
+    // feed-named account.
+    for arg in &call.args {
+        if let Some(acc) = account_in_expr(arg, ix, aliases)
+            && is_feed_named(&ix.accounts[acc].name)
+        {
+            return Some(acc);
+        }
+    }
+    // Fallback: last feed-named arg (helper convention passes the feed last).
+    call.args
+        .iter()
+        .filter_map(|a| account_in_expr(a, ix, aliases))
+        .filter(|i| is_feed_named(&ix.accounts[*i].name))
+        .last()
+}
+
 /// The account a borrow-style method call reads its bytes from:
 /// `feed.try_borrow_data()` / `feed.data.borrow()` → `feed` (index).
 fn borrow_source_account(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<String, usize>) -> Option<usize> {
@@ -368,7 +464,10 @@ fn borrow_source_account(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<
 fn account_in_expr(e: &Expr, ix: &NativeInstruction, aliases: &HashMap<String, usize>) -> Option<usize> {
     match e {
         Expr::Field(f) => {
-            if let Some(acc) = base_account(&f.base, ix, aliases) {
+            // Try the full field first so `ctx.accounts.<account>` / `self.<account>`
+            // resolve (base_account recognizes those shapes only when handed
+            // the complete field, not after peeling to the base path).
+            if let Some(acc) = base_account(e, ix, aliases) {
                 return Some(acc);
             }
             account_in_expr(&f.base, ix, aliases)
