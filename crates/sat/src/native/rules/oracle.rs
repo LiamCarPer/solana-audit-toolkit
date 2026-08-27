@@ -195,6 +195,13 @@ fn scan_expr_accesses(
                 .or_else(|| base_account(e, ix, aliases));
             if let Some(acc) = acc {
                 for member in &members {
+                    // The account-identifying member (`ctx.accounts.oracle` →
+                    // member `oracle`, `self.oracle` → `oracle`) is the account
+                    // boundary, not a payload read — only members strictly below
+                    // it in the chain count.
+                    if *member == ix.accounts[acc].name {
+                        continue;
+                    }
                     collector.record(acc, member);
                 }
             }
