@@ -27,9 +27,13 @@ pub mod expectations;
 pub fn analyze(parsed_files: &[(syn::File, String)]) -> Vec<Finding> {
     let program = frontend::build_program(parsed_files);
     if program.instructions.is_empty() {
-        // Anchor-only workspace: the SAT031/033 validation slice and the
-        // SAT032 state-creation slice have Anchor fallback paths.
-        let mut findings = rules::validate::check(&program, parsed_files);
+        // Anchor-only workspace: the cross-cutting rules (validate, oracle,
+        // taint, accounting, sysvar-introspection) all carry Anchor fallback
+        // paths via the shared extraction, and the remaining slices (auth,
+        // pda_cei, lifecycle, cpi) no-op on an empty native instruction set.
+        // Run the full slice set here so `sat analyze src` on an Anchor
+        // program is a complete scan — state_creation is not in `rules::run`.
+        let mut findings = rules::run(&program, parsed_files);
         findings.extend(rules::state_creation::check(&program, parsed_files));
         return findings;
     }
