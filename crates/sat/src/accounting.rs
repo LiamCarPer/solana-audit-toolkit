@@ -28,7 +28,7 @@ use anyhow::Result;
 use syn::Expr;
 
 use crate::native::model::{NativeInstruction, NativeProgram};
-use crate::native::rules::validate::{FnIndex, collect_blocks};
+use crate::native::rules::validate::{FnIndex, collect_blocks, collect_blocks_scoped};
 use crate::types::{Finding, Severity};
 
 /// Exact title prefix from `docs/NATIVE_BACKEND.md` section 7.
@@ -460,7 +460,8 @@ fn analyze_instruction(ix: &NativeInstruction, blocks: &[&syn::Block]) -> Vec<Fi
     findings
 }
 
-/// SAT039: flag token-accounting drift shapes. Native-model path.
+/// SAT039: flag token-accounting drift shapes. Native path plus the Anchor
+/// `#[program]` fallback via the shared Anchor extraction.
 pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding> {
     use std::collections::HashSet;
 
@@ -475,6 +476,21 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
         collect_blocks(handler, &index, &mut visited, 0, &mut blocks, &[]);
         findings.extend(analyze_instruction(ix, &blocks));
     }
+
+    // Anchor path: blocks resolve with the receiver-aware method scope that
+    // SAT031 uses, so helper name collisions across Accounts structs do not
+    // leak CPIs into the wrong instruction's accounting (the Marinade class).
+    crate::native::rules::validate::for_each_anchor_instruction(
+        parsed,
+        &mut |ix, _bundles, ms, _extra, roots, _aa, _state_accs| {
+            let Some((handler, file_idx)) = index.lookup(&ix.handler, &ix.file) else { return };
+            let mut visited = HashSet::new();
+            visited.insert((file_idx, ix.handler.clone()));
+            let mut blocks: Vec<&syn::Block> = Vec::new();
+            collect_blocks_scoped(handler, &index, &mut visited, 0, &mut blocks, roots, Some(ms));
+            findings.extend(analyze_instruction(ix, &blocks));
+        },
+    );
 
     findings
 }
@@ -493,11 +509,10 @@ pub fn run(src_path: Option<&str>) -> Result<()> {
         anyhow::bail!("No Rust source files found under the given path.");
     }
 
-    let Some(program) = output.native_program.as_ref() else {
-        anyhow::bail!("No native program found (no `entrypoint!` / `process_instruction` marker).");
-    };
-
-    let findings = check(program, &output.parsed_files);
+    // `check` handles both the native model and the Anchor fallback, so an
+    // empty native program is fine for Anchor-only workspaces.
+    let program = output.native_program.as_ref().cloned().unwrap_or_default();
+    let findings = check(&program, &output.parsed_files);
     if findings.is_empty() {
         ui::print_success("No accounting drift shapes detected.");
         return Ok(());

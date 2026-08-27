@@ -13,7 +13,7 @@ mod native {
     }
     pub mod rules {
         pub mod validate {
-            pub use sat::native::rules::validate::{FnIndex, collect_blocks};
+            pub use sat::native::rules::validate::{FnIndex, collect_blocks, for_each_anchor_instruction};
         }
     }
 }

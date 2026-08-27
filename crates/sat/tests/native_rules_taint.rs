@@ -147,3 +147,76 @@ pub fn process_instruction(
     let flagged = by_rule(&findings, SAT038);
     let _ = flagged; // documented behavior: scalar bounds are not yet tracked
 }
+
+// ── Anchor fallback path ─────────────────────────────────────────────────────
+
+/// An Anchor instruction where an unanchored account's data field pollutes a
+/// program-controlled state account — the Anchor path must fire SAT038.
+#[test]
+fn anchor_flow_fires_via_fallback() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod vault {
+    use super::*;
+    pub fn deposit(ctx: Context<Deposit>, _amount: u64) -> Result<()> {
+        let input = u64::from_le_bytes(ctx.accounts.amount_source.data.borrow()[0..8].try_into().unwrap());
+        let mut data = ctx.accounts.state.try_borrow_mut_data()?;
+        data[0..8].copy_from_slice(&input.to_le_bytes());
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    /// CHECK: attacker-controlled by design, but state is trusted.
+    pub amount_source: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub state: Account<'info, VaultState>,
+}
+
+#[account]
+pub struct VaultState {
+    pub deposited: u64,
+}
+"#;
+    let (program, findings) = run(source);
+    assert!(program.instructions.is_empty(), "anchor source builds no native instructions");
+    let flagged = by_rule(&findings, SAT038);
+    assert!(!flagged.is_empty(), "anchor fallback must detect the unanchored flow: {findings:#?}");
+}
+
+/// A `Signer<'info>`-pinned authority must NOT fire via the Anchor path (the
+/// marginfi FP class — recognised as anchored by declared field type).
+#[test]
+fn anchor_signer_field_does_not_fire() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod vault {
+    use super::*;
+    pub fn withdraw(ctx: Context<Withdraw>, _amount: u64) -> Result<()> {
+        let mut data = ctx.accounts.state.try_borrow_mut_data()?;
+        data[0..8].copy_from_slice(&_amount.to_le_bytes());
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub state: Account<'info, VaultState>,
+}
+
+#[account]
+pub struct VaultState {
+    pub deposited: u64,
+}
+"#;
+    let (_, findings) = run(source);
+    let flagged = by_rule(&findings, SAT038);
+    assert!(flagged.is_empty(), "Signer-typed authority must be anchored: {findings:#?}");
+}

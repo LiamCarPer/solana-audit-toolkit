@@ -1409,9 +1409,89 @@ fn expand_into(
     }
 }
 
-/// Name-based kind inference for the Anchor path (no frontend model).
-fn infer_kind(name: &str) -> AccountKind {
+/// The closure argument for [`for_each_anchor_instruction`].
+pub type AnchorInstructionVisitor<'a> = &'a mut dyn FnMut(
+    &NativeInstruction,
+    &Bundles,
+    &MethodScope,
+    &HashSet<usize>,
+    &[Expr],
+    &HashMap<String, Vec<syn::Attribute>>,
+    &HashSet<usize>,
+);
+
+/// Iterate every resolved Anchor instruction (the `#[program]`-module
+/// fallback path), yielding the fully-resolved inputs the shared graph
+/// analyzer needs. This lets overlapping rule slices (SAT031's validation
+/// graph, the taint engine, the accounting simulator, the oracle rules) reuse
+/// one Anchor-extraction path instead of each re-implementing it.
+///
+/// No-op when the workspace carries no Anchor `#[program]` module.
+/// `f` receives the instruction model, its bundle scope, the method scope
+/// (receiver-aware call resolution), any constant-seed canonical accounts,
+/// and the comment/`#[account(constraint = ...)]`/`#[access_control]` roots.
+pub fn for_each_anchor_instruction(parsed: &[(syn::File, String)], f: AnchorInstructionVisitor<'_>) {
+    let structs = StructIndex::build(parsed);
+    for anchor in anchor_instructions(parsed) {
+        let (slots, account_types, account_attrs) = expand_accounts(&anchor.root_struct, &structs);
+        if slots.is_empty() {
+            continue;
+        }
+        let accounts = slots
+            .into_iter()
+            .map(|(name, ty_ident)| {
+                let kind = infer_kind(&name, &ty_ident);
+                ResolvedAccount { name, kind, ..ResolvedAccount::default() }
+            })
+            .collect();
+        let ix = NativeInstruction {
+            name: anchor.name,
+            discriminator: None,
+            handler: anchor.handler,
+            file: anchor.file,
+            line: anchor.line,
+            accounts,
+        };
+        let bundles = Bundles::build(&ix.accounts, &account_types, &structs);
+
+        let mut roots = attr_expr_roots(&anchor.attrs);
+        if let Some(fields) = structs.fields.get(&anchor.root_struct) {
+            for (_fname, _fty, attrs) in fields {
+                roots.extend(account_constraint_exprs(attrs));
+            }
+        }
+
+        let extra_canonical = const_seed_pdas(&ix, &account_attrs);
+
+        // Program-owned state accounts (in-file struct fields, no seeds) are
+        // pollution targets for the taint engine — distinct from SAT031's
+        // chain-anchoring canonical set, which must not treat caller-dependent
+        // state as pinned.
+        let mut state_accounts = HashSet::new();
+        for (i, acc) in ix.accounts.iter().enumerate() {
+            if let Some(ty) = account_types.get(&acc.name)
+                && structs.fields.contains_key(ty)
+                && !account_attrs.get(&acc.name).is_some_and(|a| has_seeds_attr(a))
+            {
+                state_accounts.insert(i);
+            }
+        }
+
+        let method_scope = MethodScope { root: anchor.root_struct.clone(), account_types };
+
+        f(&ix, &bundles, &method_scope, &extra_canonical, &roots, &account_attrs, &state_accounts);
+    }
+}
+
+/// Name-based kind inference for the Anchor path (no frontend model). Also
+/// honors the declared field type so `Signer<'info>` / `Program<'info, X>` /
+/// `Sysvar<'info, X>` slots are classified correctly (the taint engine relies
+/// on this to treat signer-pinned authorities as anchored).
+fn infer_kind(name: &str, type_ident: &str) -> AccountKind {
     let lower = name.to_ascii_lowercase();
+    if type_ident == "Signer" {
+        return AccountKind::Signer;
+    }
     if lower == "system_program" {
         AccountKind::SystemProgram
     } else if matches!(
@@ -1961,7 +2041,6 @@ fn walk_transfer_sources(
 /// source (this is what makes the Cashio tree analyzable).
 pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding> {
     let index = FnIndex::build(parsed);
-    let structs = StructIndex::build(parsed);
 
     if !program.instructions.is_empty() {
         let mut findings = Vec::new();
@@ -1977,53 +2056,31 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
     }
 
     let mut findings = Vec::new();
-    for anchor in anchor_instructions(parsed) {
-        let (slots, account_types, account_attrs) = expand_accounts(&anchor.root_struct, &structs);
-        if slots.is_empty() {
-            continue;
-        }
-        let accounts = slots
-            .into_iter()
-            .map(|(name, _)| {
-                let kind = infer_kind(&name);
-                ResolvedAccount { name, kind, ..ResolvedAccount::default() }
-            })
-            .collect();
-        let ix = NativeInstruction {
-            name: anchor.name,
-            discriminator: None,
-            handler: anchor.handler,
-            file: anchor.file,
-            line: anchor.line,
-            accounts,
-        };
-        let bundles = Bundles::build(&ix.accounts, &account_types, &structs);
-
-        // Handler attribute roots (`#[access_control(...)]`) plus the
-        // `#[account(constraint = ...)]` comparisons on the Accounts struct's
-        // field definitions.
-        let mut roots = attr_expr_roots(&anchor.attrs);
-        if let Some(fields) = structs.fields.get(&anchor.root_struct) {
-            for (_fname, _fty, attrs) in fields {
-                roots.extend(account_constraint_exprs(attrs));
-            }
-        }
-
-        // Method calls resolve to the receiving Accounts struct's impl only,
-        // so a generic helper name (`process`, `validate`, …) cannot pull
-        // every impl of that name into this instruction's graph. Accounts
-        // whose `#[account(seeds = ...)]` derivation references no
-        // instruction account are constant-seed PDAs — canonical anchors.
-        let method_scope = MethodScope { root: anchor.root_struct.clone(), account_types };
-        let extra_canonical = const_seed_pdas(&ix, &account_attrs);
-
-        let Some(graph) =
-            analyze_instruction_graph(&ix, &index, &bundles, &roots, Some(&method_scope), &extra_canonical)
+    for_each_anchor_instruction(parsed, &mut |ix,
+                                              bundles,
+                                              method_scope,
+                                              extra_canonical,
+                                              roots,
+                                              account_attrs,
+                                              _state_accs| {
+        let Some(graph) = analyze_instruction_graph(ix, &index, bundles, roots, Some(method_scope), extra_canonical)
         else {
-            continue;
+            return;
         };
-        findings.extend(sat031_findings(&ix, &graph));
-        findings.extend(sat033_findings(&ix, &graph, &account_attrs));
-    }
+        findings.extend(sat031_findings(ix, &graph));
+        findings.extend(sat033_findings(ix, &graph, account_attrs));
+    });
     findings
+}
+
+/// Whether an `#[account(...)]` attribute carries a `seeds =` entry.
+fn has_seeds_attr(attrs: &[syn::Attribute]) -> bool {
+    for meta in account_metas(attrs) {
+        if let syn::Meta::NameValue(nv) = meta
+            && nv.path.is_ident("seeds")
+        {
+            return true;
+        }
+    }
+    false
 }

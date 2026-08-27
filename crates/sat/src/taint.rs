@@ -481,8 +481,17 @@ fn location(ix: &NativeInstruction) -> String {
 /// flattened handler + helper blocks, then drop flows whose sources are
 /// validated by the anchor model (any anchored comparison touching the
 /// source account, or canonical membership).
-fn analyze_instruction(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<Finding> {
-    let mut state = TaintState::new(ix, &graph.canonical);
+fn analyze_instruction(
+    ix: &NativeInstruction,
+    graph: &InstructionGraph,
+    state_accounts: &HashSet<usize>,
+) -> Vec<Finding> {
+    // Program-owned state accounts (`pub state: Account<'info, X>` without
+    // seeds) are pollution targets even though SAT031's chain-anchoring
+    // canonical set leaves them unanchored. Union them in.
+    let mut canonical = graph.canonical.clone();
+    canonical.extend(state_accounts.iter().copied());
+    let mut state = TaintState::new(ix, &canonical);
     if state.sources.is_empty() {
         return Vec::new();
     }
@@ -552,7 +561,8 @@ fn analyze_instruction(ix: &NativeInstruction, graph: &InstructionGraph) -> Vec<
 }
 
 /// SAT038: flag attacker-influenced values flowing into privileged sinks
-/// without anchoring validation. Native-model path.
+/// without anchoring validation. Native path plus the Anchor `#[program]`
+/// fallback (via [`crate::native::rules::validate::for_each_anchor_instruction`]).
 pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding> {
     let index = FnIndex::build(parsed);
     let bundles = Bundles::empty();
@@ -560,9 +570,21 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
 
     for ix in &program.instructions {
         if let Some(graph) = analyze_instruction_graph(ix, &index, &bundles, &[], None, &HashSet::new()) {
-            findings.extend(analyze_instruction(ix, &graph));
+            findings.extend(analyze_instruction(ix, &graph, &HashSet::new()));
         }
     }
+
+    // Anchor path: reuse the shared Anchor extraction so bundles, method
+    // scope and constant-seed canonical accounts resolve the same way they
+    // do for SAT031 (this is what makes Anchor programs analyzable).
+    crate::native::rules::validate::for_each_anchor_instruction(
+        parsed,
+        &mut |ix, bundles, ms, extra, roots, _aa, state_accounts| {
+            if let Some(graph) = analyze_instruction_graph(ix, &index, bundles, roots, Some(ms), extra) {
+                findings.extend(analyze_instruction(ix, &graph, state_accounts));
+            }
+        },
+    );
 
     findings
 }
@@ -588,7 +610,19 @@ fn referenced_accounts(
                 }
             }
         }
-        Expr::Field(f) => referenced_accounts(&f.base, ix, aliases, out),
+        Expr::Field(f) => {
+            // `ctx.accounts.<name>` — resolve the inner account name.
+            if let Expr::Field(inner) = &*f.base
+                && matches!(&*inner.base, Expr::Path(p) if p.path.is_ident("ctx"))
+                && matches!(&inner.member, syn::Member::Named(n) if n == "accounts")
+                && let syn::Member::Named(name) = &f.member
+                && let Some(acc) = account_index(ix, &name.to_string())
+            {
+                out.insert(acc);
+                return;
+            }
+            referenced_accounts(&f.base, ix, aliases, out);
+        }
         Expr::MethodCall(m) => {
             referenced_accounts(&m.receiver, ix, aliases, out);
             for arg in &m.args {
@@ -662,11 +696,11 @@ pub fn run(src_path: Option<&str>) -> Result<()> {
         anyhow::bail!("No Rust source files found under the given path.");
     }
 
-    let Some(program) = output.native_program.as_ref() else {
-        anyhow::bail!("No native program found (no `entrypoint!` / `process_instruction` marker).");
-    };
-
-    let findings = check(program, &output.parsed_files);
+    // `check` handles both the native model and the Anchor `#[program]`
+    // fallback (via the shared Anchor extraction), so an empty native
+    // program is fine when the workspace is Anchor-only.
+    let program = output.native_program.as_ref().cloned().unwrap_or_default();
+    let findings = check(&program, &output.parsed_files);
     if findings.is_empty() {
         ui::print_success("No unvalidated flows detected.");
         return Ok(());

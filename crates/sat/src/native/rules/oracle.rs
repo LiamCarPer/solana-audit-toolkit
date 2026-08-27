@@ -480,8 +480,8 @@ fn analyze_instruction(ix: &NativeInstruction, blocks: &[&syn::Block]) -> Vec<Fi
 }
 
 /// SAT034/035/036: flag price feeds whose staleness/confidence/exponent data
-/// is never consumed. Native-model path (the Anchor path is a documented
-/// follow-up — see docs/NATIVE_BACKEND.md).
+/// is never consumed. Native-model path plus the Anchor `#[program]` fallback
+/// via the shared Anchor extraction.
 pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Finding> {
     let index = FnIndex::build(parsed);
     let mut findings = Vec::new();
@@ -496,6 +496,20 @@ pub fn check(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Fin
         collect_blocks(handler, &index, &mut visited, 0, &mut blocks, &[]);
         findings.extend(analyze_instruction(ix, &blocks));
     }
+
+    // Anchor path: feed-named accounts resolve through the Anchor fallback so
+    // staleness/confidence/exponent checks apply to Anchor programs too.
+    crate::native::rules::validate::for_each_anchor_instruction(
+        parsed,
+        &mut |ix, _bundles, _ms, _extra, roots, _aa, _state_accs| {
+            let Some((handler, file_idx)) = index.lookup(&ix.handler, &ix.file) else { return };
+            let mut blocks: Vec<&syn::Block> = Vec::new();
+            let mut visited = HashSet::new();
+            visited.insert((file_idx, ix.handler.clone()));
+            collect_blocks(handler, &index, &mut visited, 0, &mut blocks, roots);
+            findings.extend(analyze_instruction(ix, &blocks));
+        },
+    );
 
     findings
 }
