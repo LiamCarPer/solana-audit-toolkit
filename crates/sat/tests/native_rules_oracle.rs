@@ -430,3 +430,47 @@ pub struct SetPrice<'info> {
     assert_eq!(by_rule(&findings, SAT035).len(), 1, "confidence fires: {findings:#?}");
     assert_eq!(by_rule(&findings, SAT036).len(), 1, "exponent fires: {findings:#?}");
 }
+
+/// A feed only passed to a *validating* oracle helper (`get_price` →
+/// `get_validated_price`, which bounds age/confidence) must be suppressed:
+/// the caller-side rule finding is not actionable.
+#[test]
+fn validating_oracle_helper_suppresses_feed_findings() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod m {
+    use super::*;
+    pub fn refresh(ctx: Context<Refresh>) -> Result<()> {
+        let clock = &Clock::get()?;
+        validate_token_info_config(
+            ctx.accounts.pyth_oracle.as_ref(),
+            ctx.accounts.switchboard_price_oracle.as_ref(),
+        )?;
+        get_price(
+            ctx.accounts.pyth_oracle.as_ref(),
+            ctx.accounts.switchboard_price_oracle.as_ref(),
+            clock,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Refresh<'info> {
+    pub pyth_oracle: Option<AccountInfo<'info>>,
+    pub switchboard_price_oracle: Option<AccountInfo<'info>>,
+}
+
+fn validate_token_info_config(_a: Option<&AccountInfo>, _b: Option<&AccountInfo>) -> Result<()> { Ok(()) }
+fn get_price(_a: Option<&AccountInfo>, _b: Option<&AccountInfo>, _c: &Clock) -> Result<()> { Ok(()) }
+"#;
+    let (_, findings) = run(source);
+    assert!(
+        by_rule(&findings, SAT034).is_empty()
+            && by_rule(&findings, SAT035).is_empty()
+            && by_rule(&findings, SAT036).is_empty(),
+        "feeds ingested by a validating oracle helper must be suppressed: {findings:#?}"
+    );
+}

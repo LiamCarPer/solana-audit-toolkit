@@ -73,11 +73,22 @@ const EXPONENT_FIELDS: &[&str] = &["expo", "decimal", "decimals", "exponent"];
 struct AccessCollector {
     /// account index → accessed member names.
     accesses: HashMap<usize, HashSet<String>>,
+    /// account indices whose feed was consumed by a validating oracle helper
+    /// (`get_price` / `get_validated_price` / ...): the helper enforces the
+    /// staleness/confidence bounds, so the caller's rule findings are not
+    /// actionable.
+    validated_feeds: HashSet<usize>,
 }
 
 impl AccessCollector {
     fn record(&mut self, acc: usize, member: &str) {
         self.accesses.entry(acc).or_default().insert(member.to_string());
+    }
+
+    /// A feed is "validated" when it is passed into a helper that bounds its
+    /// age/confidence/exponent (e.g. kamino's `get_price` → `get_validated_price`).
+    fn is_validated_feed(&self, acc: usize) -> bool {
+        self.validated_feeds.contains(&acc)
     }
 
     fn has_member(&self, acc: usize, member: &str) -> bool {
@@ -96,7 +107,7 @@ const IDENTITY_MEMBERS: &[&str] = &["key", "lamports", "owner", "executable", "r
 /// Walk the flattened handler + helper blocks, collecting per-account member
 /// accesses with alias and deserialized-local tainting.
 fn collect_accesses(blocks: &[&syn::Block], ix: &NativeInstruction) -> AccessCollector {
-    let mut collector = AccessCollector { accesses: HashMap::new() };
+    let mut collector = AccessCollector { accesses: HashMap::new(), validated_feeds: HashSet::new() };
     for block in blocks {
         let mut aliases = HashMap::new();
         scan_block_accesses(block, ix, &mut aliases, &mut collector);
@@ -208,11 +219,16 @@ fn scan_expr_accesses(
             scan_expr_accesses(&f.base, ix, aliases, collector);
         }
         Expr::Call(c) => {
-            // An oracle-helper call consumes a price feed even when its result
+            // An oracle-helper call consumes price feed(s) even when its result
             // is not bound to a local (`get_oracle_price(&src, &feed, slot)?`
-            // used directly). Mark the payload read here.
-            if let Some(acc) = oracle_price_source_account(e, ix, aliases) {
-                collector.record(acc, "payload");
+            // used directly). Mark the payload reads here.
+            let feeds = oracle_price_source_accounts(e, ix, aliases);
+            let validating = validating_oracle_helper_name(&call_func_name(e).unwrap_or_default());
+            for acc in &feeds {
+                collector.record(*acc, "payload");
+                if validating {
+                    collector.validated_feeds.insert(*acc);
+                }
             }
             scan_expr_accesses(&c.func, ix, aliases, collector);
             for arg in &c.args {
@@ -390,6 +406,41 @@ fn deser_source_account(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<S
     account_in_expr(first, ix, aliases)
 }
 
+/// Oracle helpers that *validate* the feed rather than merely read it:
+/// they enforce the staleness / confidence / exponent bounds on entry, so a
+/// caller-side finding is not actionable (kamino's `get_price` →
+/// `get_validated_price`, `validate_pyth_confidence`).
+fn validating_oracle_helper_name(name: &str) -> bool {
+    matches!(
+        name,
+        "get_price"
+            | "get_validated_price"
+            | "get_most_recent_price_and_twap"
+            | "validate_pyth_confidence"
+            | "validate_token_info_config"
+            | "is_valid_price"
+            | "check_price_age"
+            | "check_twap_in_tolerance"
+    )
+}
+
+/// Get the name of a call expression's function path, if any.
+fn call_func_name(expr: &Expr) -> Option<String> {
+    let call = match expr {
+        Expr::Call(c) => c,
+        Expr::Try(t) => return call_func_name(&t.expr),
+        Expr::Paren(p) => return call_func_name(&p.expr),
+        Expr::MethodCall(m) if matches!(m.method.to_string().as_str(), "unwrap" | "expect") => {
+            return call_func_name(&m.receiver);
+        }
+        _ => return None,
+    };
+    match &*call.func {
+        Expr::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    }
+}
+
 /// Oracle-price helper calls: `get_oracle_price(&source, &feed, slot)`,
 /// `get_pyth_price(&feed, slot)`, `get_oracle_price_data(&feed, ...)`.
 /// These read price/time/confidence data from a price-feed account and return
@@ -410,43 +461,42 @@ fn oracle_price_helper_name(name: &str) -> bool {
     )
 }
 
-/// Resolve the price-feed account an oracle-helper call reads from.
-/// `get_oracle_price(&oracle_source, &ctx.accounts.oracle, clock.slot)` →
-/// the `oracle` account index. First looks at the feed-shaped argument
-/// (index 1 for `get_oracle_price`-style, index 0 otherwise).
-fn oracle_price_source_account(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<String, usize>) -> Option<usize> {
+/// Collect every price-feed account an oracle-helper call reads from
+/// (a helper may take several feeds, e.g. kamino's
+/// `get_price(&token_info, &pyth, &switchboard, ...)`).
+fn oracle_price_source_accounts(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<String, usize>) -> Vec<usize> {
     let call = match expr {
         Expr::Call(c) => c,
-        Expr::Try(t) => return oracle_price_source_account(&t.expr, ix, aliases),
-        Expr::Paren(p) => return oracle_price_source_account(&p.expr, ix, aliases),
+        Expr::Try(t) => return oracle_price_source_accounts(&t.expr, ix, aliases),
+        Expr::Paren(p) => return oracle_price_source_accounts(&p.expr, ix, aliases),
         Expr::MethodCall(m) if matches!(m.method.to_string().as_str(), "unwrap" | "expect") => {
-            return oracle_price_source_account(&m.receiver, ix, aliases);
+            return oracle_price_source_accounts(&m.receiver, ix, aliases);
         }
-        _ => return None,
+        _ => return Vec::new(),
     };
     let name = match &*call.func {
-        Expr::Path(p) => p.path.segments.last()?.ident.to_string(),
-        _ => return None,
+        Expr::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => return Vec::new(),
     };
-    if !oracle_price_helper_name(&name) {
-        return None;
+    let name = match name {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+    // Accept read helpers (`get_oracle_price`) and validating helpers
+    // (`get_price`, `get_validated_price`) — both take feed-shaped args.
+    if !oracle_price_helper_name(&name) && !validating_oracle_helper_name(&name) {
+        return Vec::new();
     }
-    // Feed-shaped args: pass `&ctx.accounts.oracle` / `price_oracle` /
-    // `&feed` / `&oracle`. Prefer a `&AccountInfo`-style reference to a
-    // feed-named account.
-    for arg in &call.args {
-        if let Some(acc) = account_in_expr(arg, ix, aliases)
-            && is_feed_named(&ix.accounts[acc].name)
-        {
-            return Some(acc);
-        }
-    }
-    // Fallback: last feed-named arg (helper convention passes the feed last).
     call.args
         .iter()
         .filter_map(|a| account_in_expr(a, ix, aliases))
         .filter(|i| is_feed_named(&ix.accounts[*i].name))
-        .last()
+        .collect()
+}
+
+/// Resolve the first price-feed account an oracle-helper call reads from.
+fn oracle_price_source_account(expr: &Expr, ix: &NativeInstruction, aliases: &HashMap<String, usize>) -> Option<usize> {
+    oracle_price_source_accounts(expr, ix, aliases).into_iter().next()
 }
 
 /// The account a borrow-style method call reads its bytes from:
@@ -517,6 +567,12 @@ fn analyze_instruction(ix: &NativeInstruction, blocks: &[&syn::Block]) -> Vec<Fi
 
     for feed_idx in feeds {
         let name = ix.accounts[feed_idx].name.clone();
+        // A feed ingested by a validating oracle helper (`get_price` →
+        // `get_validated_price`) has its staleness/confidence bounds enforced
+        // inside the helper, so a caller-side finding is not actionable.
+        if accesses.is_validated_feed(feed_idx) {
+            continue;
+        }
         // CPI-passed-only feeds (data never read in program) are suppressed:
         // the callee program validates them. Touching only identity members
         // (`key`, `owner`, ...) is not a payload read.
