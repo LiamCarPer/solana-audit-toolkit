@@ -78,11 +78,27 @@ struct AccessCollector {
     /// staleness/confidence bounds, so the caller's rule findings are not
     /// actionable.
     validated_feeds: HashSet<usize>,
+    /// account indices whose loaded struct members are assigned-to (LHS of a
+    /// write): a mutable oracle being *set*, not a price feed being consumed.
+    written_feeds: HashSet<usize>,
 }
 
 impl AccessCollector {
     fn record(&mut self, acc: usize, member: &str) {
         self.accesses.entry(acc).or_default().insert(member.to_string());
+    }
+
+    /// An account is a write-target when one of its local aliases appears on
+    /// the LHS of an assignment (`price_oracle.agg.price = ...`).
+    fn mark_written(&mut self, acc: usize) {
+        self.written_feeds.insert(acc);
+    }
+
+    /// A feed that is only ever written (set to a value, not read to price
+    /// downstream) is not a consumed price source, so its missing-consumption
+    /// findings are not actionable.
+    fn is_write_target(&self, acc: usize) -> bool {
+        self.written_feeds.contains(&acc)
     }
 
     /// A feed is "validated" when it is passed into a helper that bounds its
@@ -107,7 +123,8 @@ const IDENTITY_MEMBERS: &[&str] = &["key", "lamports", "owner", "executable", "r
 /// Walk the flattened handler + helper blocks, collecting per-account member
 /// accesses with alias and deserialized-local tainting.
 fn collect_accesses(blocks: &[&syn::Block], ix: &NativeInstruction) -> AccessCollector {
-    let mut collector = AccessCollector { accesses: HashMap::new(), validated_feeds: HashSet::new() };
+    let mut collector =
+        AccessCollector { accesses: HashMap::new(), validated_feeds: HashSet::new(), written_feeds: HashSet::new() };
     for block in blocks {
         let mut aliases = HashMap::new();
         scan_block_accesses(block, ix, &mut aliases, &mut collector);
@@ -141,7 +158,8 @@ fn scan_block_accesses(
                     // oracle helpers: `let o = get_oracle_price(&src, &feed, slot)?;`
                     let source = deser_source_account(init_expr, ix, aliases)
                         .or_else(|| borrow_source_account(init_expr, ix, aliases))
-                        .or_else(|| oracle_price_source_account(init_expr, ix, aliases));
+                        .or_else(|| oracle_price_source_account(init_expr, ix, aliases))
+                        .or_else(|| account_in_expr(init_expr, ix, aliases));
                     if let syn::Pat::Ident(pi) = &l.pat
                         && let Some(acc) = source
                     {
@@ -241,6 +259,25 @@ fn scan_expr_accesses(
                 scan_expr_accesses(arg, ix, aliases, collector);
             }
         }
+        Expr::Assign(a) => {
+            // The LHS is a write target, not a feed read. Skip recording its
+            // members as consumed payload (a mutable oracle being set, not
+            // priced), but still walk the RHS for reads.
+            if let syn::Expr::Field(f) = &*a.left {
+                let mut base = &f.base;
+                while let syn::Expr::Field(inner) = &**base {
+                    base = &inner.base;
+                }
+                if let syn::Expr::Path(p) = &**base
+                    && let Some(ident) = p.path.get_ident()
+                    && let Some(acc) = aliases.get(&ident.to_string())
+                {
+                    collector.mark_written(*acc);
+                }
+            }
+            scan_expr_accesses(&a.left, ix, aliases, collector);
+            scan_expr_accesses(&a.right, ix, aliases, collector);
+        }
         Expr::Block(b) => scan_block_accesses(&b.block, ix, aliases, collector),
         Expr::Unsafe(u) => scan_block_accesses(&u.block, ix, aliases, collector),
         Expr::Const(c) => scan_block_accesses(&c.block, ix, aliases, collector),
@@ -279,10 +316,6 @@ fn scan_expr_accesses(
         Expr::Binary(b) => {
             scan_expr_accesses(&b.left, ix, aliases, collector);
             scan_expr_accesses(&b.right, ix, aliases, collector);
-        }
-        Expr::Assign(a) => {
-            scan_expr_accesses(&a.left, ix, aliases, collector);
-            scan_expr_accesses(&a.right, ix, aliases, collector);
         }
         Expr::Index(i) => {
             scan_expr_accesses(&i.expr, ix, aliases, collector);
@@ -571,6 +604,11 @@ fn analyze_instruction(ix: &NativeInstruction, blocks: &[&syn::Block]) -> Vec<Fi
         // `get_validated_price`) has its staleness/confidence bounds enforced
         // inside the helper, so a caller-side finding is not actionable.
         if accesses.is_validated_feed(feed_idx) {
+            continue;
+        }
+        // A mutable oracle being set (`price_oracle.agg.price = ...`) is a
+        // write-target, not a consumed price feed (drift's pyth test mock).
+        if accesses.is_write_target(feed_idx) {
             continue;
         }
         // CPI-passed-only feeds (data never read in program) are suppressed:

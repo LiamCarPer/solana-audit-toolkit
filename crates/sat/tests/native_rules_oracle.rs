@@ -474,3 +474,40 @@ fn get_price(_a: Option<&AccountInfo>, _b: Option<&AccountInfo>, _c: &Clock) -> 
         "feeds ingested by a validating oracle helper must be suppressed: {findings:#?}"
     );
 }
+
+/// A mutable oracle being *set* (`price_oracle.agg.price = ...`) is a write
+/// target, not a consumed price feed — the oracle rules must stay silent.
+/// Guards drift's pyth test-mock shape (`.price` accounts only assigned to).
+#[test]
+fn write_target_feed_is_not_a_consumed_read() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod pyth {
+    use super::*;
+    pub fn initialize(ctx: Context<Initialize>, price: i64, expo: i32, conf: u64) -> Result<()> {
+        let oracle = &ctx.accounts.price;
+        let mut price_oracle = Price::load(oracle).unwrap();
+        price_oracle.agg.price = price;
+        price_oracle.agg.conf = conf;
+        price_oracle.agg.conf = 0;
+        price_oracle.expo = expo;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub price: AccountInfo<'info>,
+}
+"#;
+    let (_, findings) = run(source);
+    assert!(
+        by_rule(&findings, SAT034).is_empty()
+            && by_rule(&findings, SAT035).is_empty()
+            && by_rule(&findings, SAT036).is_empty(),
+        "write-target oracle must not fire missing-consumption findings: {findings:#?}"
+    );
+}
