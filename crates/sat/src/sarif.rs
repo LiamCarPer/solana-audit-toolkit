@@ -174,6 +174,11 @@ const RULES: &[(&str, &str, &str)] = &[
         "A price-feed account's exponent field is never consumed, so raw feed integers are used without their scale.",
     ),
     (
+        "SAT041",
+        "Oracle Value Flow",
+        "A price value from program state (or a feed) flows into a borrow/withdraw/token-CPI amount with no confidence/staleness/scale bound, allowing a caller-drivable price to inflate the value decision.",
+    ),
+    (
         "SAT037",
         "Sysvar-Introspection Misuse",
         "Unchecked sysvar introspection parses caller-supplied account data without a sysvar address check.",
@@ -308,6 +313,8 @@ pub(crate) fn classify_finding_rule(finding: &Finding) -> String {
         "SAT035".to_string()
     } else if finding.title.contains("Oracle Decimals") {
         "SAT036".to_string()
+    } else if finding.title.contains("Oracle Value Flow") {
+        "SAT041".to_string()
     } else if finding.title.contains("Unverified Signer Account") {
         "SAT019".to_string()
     } else if finding.title.contains("Unverified Owner Account") {

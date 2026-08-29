@@ -155,6 +155,10 @@ against the derived address counts as a key check.
 
 Oracle v1 scope note: "never consumed" is the signal — reading a safety field without *bounding* it (e.g. `conf` read but never compared) is a documented refinement. The Anchor-path oracle extension is a follow-up.
 
+| SAT041 | `Oracle Value Flow:` | High | a price value read from program-owned market/price state (`market.mark_price`, `price_cache[..].price`) or a feed account flows into a value-decision sink (borrow/withdraw/token-CPI amount) with no confidence/staleness/scale bound on the path | skip if the price source had a bound field (`conf`/`publish_time`/`expo`/`delay`) consumed, or the price is compared against a constant/threshold. Suppression mirrors the SAT034-036 `validating_oracle_helper_name` bound set |
+
+SAT041 targets the Mango mark-price class that SAT034-036 miss (program-owned price caches are not feed-named, so the oracle rules' feed-name detector never sees them) and that SAT038 miss (a program-owned price cache is not an unanchored account index, so taint does not mark it). Findings are heuristic leads.
+
 Title wording is **load-bearing**: these exact prefixes avoid substring collisions
 with existing SARIF classifier arms (`"Missing Signer"`, `"Missing Owner"`,
 `"CEI Violation"`, `"PDA Seed"`, `"Reinitialization"`, `"Token Transfer CPI"`,

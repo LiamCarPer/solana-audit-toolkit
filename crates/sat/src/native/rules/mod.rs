@@ -17,6 +17,7 @@ pub mod cpi;
 pub mod known_validators;
 pub mod lifecycle;
 pub mod oracle;
+pub mod oracle_flow;
 pub mod pda_cei;
 pub mod state_creation;
 pub mod sysvar_introspection;
@@ -33,6 +34,7 @@ pub fn run(program: &NativeProgram, parsed: &[(syn::File, String)]) -> Vec<Findi
     findings.extend(cpi::check(program, parsed));
     findings.extend(validate::check(program, parsed));
     findings.extend(oracle::check(program, parsed));
+    findings.extend(oracle_flow::check(program, parsed));
     findings.extend(crate::taint::check(program, parsed));
     findings.extend(crate::accounting::check(program, parsed));
     findings.extend(sysvar_introspection::check(parsed));
