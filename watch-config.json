@@ -1,0 +1,9 @@
+{
+  "repos": [
+    {
+      "name": "sat-self",
+      "src_path": "crates/sat/src",
+      "local_path": "."
+    }
+  ]
+}

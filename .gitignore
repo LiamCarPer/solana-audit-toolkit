@@ -5,3 +5,6 @@ rust_out
 .notes/
 # cloned benchmark targets (never commit third-party repos)
 /bench/programs/
+# local scan/calibration state
+/.sat-watch/
+/.sat-calib/

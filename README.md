@@ -1,5 +1,11 @@
 # Solana Audit Toolkit (`sat`)
 
+[![Test](https://github.com/LiamCarPer/solana-audit-toolkit/actions/workflows/test.yml/badge.svg)](https://github.com/LiamCarPer/solana-audit-toolkit/actions/workflows/test.yml)
+[![Self-Audit](https://github.com/LiamCarPer/solana-audit-toolkit/actions/workflows/sat-self-audit.yml/badge.svg)](https://github.com/LiamCarPer/solana-audit-toolkit/actions/workflows/sat-self-audit.yml)
+[![watch](https://github.com/LiamCarPer/solana-audit-toolkit/actions/workflows/watch.yml/badge.svg)](https://github.com/LiamCarPer/solana-audit-toolkit/actions/workflows/watch.yml)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./README.md#license)
+
 A static analysis and fuzzing toolkit for Anchor-based Solana programs. Parses IDL and Rust source via `syn` to find missing signer constraints, reinitialization vectors, CEI ordering violations, unsafe account closing, overflow-prone arithmetic, CPI depth violations, Token-2022 extension risks, and more — before the program hits mainnet.
 
 ```

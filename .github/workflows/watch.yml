@@ -9,7 +9,7 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build sat
@@ -18,10 +18,10 @@ jobs:
       # (see `sat watch --help` / crates/sat/src/watch.rs for the schema).
       # Repos without a `url` are scanned relative to this checkout.
       - name: Run release delta scanner
-        run: ./target/release/sat watch watch-config.json .sat-watch
+        run: ./target/release/sat watch watch-config.json --out-dir .sat-watch
       - name: Upload scan state
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sat-watch-state
           path: .sat-watch
