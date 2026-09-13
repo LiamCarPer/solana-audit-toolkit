@@ -106,6 +106,40 @@ The generated harnesses encode the same invariants the analyzer checks staticall
 
 Interactive CLI to create structured markdown audit findings with YAML front-matter. Auto-increments `SAT-XXX` IDs from existing files in `audit-findings/`. Outputs slugified filenames (e.g. `SAT-001-missing-signer-check.md`).
 
+## GitHub Action
+
+Use `sat` as a step in any Solana program repo — it builds the tool, scans, uploads SARIF to Code Scanning, and can gate the job on severity:
+
+```yaml
+name: security
+on: [push, pull_request]
+
+permissions:
+  contents: read
+  security-events: write   # for SARIF upload
+
+jobs:
+  sat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: LiamCarPer/solana-audit-toolkit@main
+        with:
+          path: programs/vault/src
+          format: sarif
+          fail-on: high            # fail the job on HIGH/CRITICAL findings
+          args: "--config sat.toml"
+```
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `path` | `programs` | Source directory or file to scan |
+| `format` | `sarif` | `text`, `json`, or `sarif` |
+| `fail-on` | `none` | `critical\|high\|medium\|low\|info\|none` — non-zero exit above threshold |
+| `args` | — | Extra args to `sat analyze src` (e.g. `--config sat.toml`) |
+
+**Output:** `sarif-file` — path to the generated SARIF report.
+
 ## Bug Bounty Workflow
 
 See `docs/BUG_BOUNTY_WORKFLOW.md` for the recommended loop: triage, manual verification, PoC construction, false-positive control, and fuzzer follow-up.

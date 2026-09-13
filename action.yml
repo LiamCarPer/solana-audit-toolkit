@@ -1,0 +1,65 @@
+name: "sat — Solana Audit Toolkit"
+description: "Static analysis for Anchor and native Solana programs with SARIF export and severity gating"
+author: "Liam Carvajal"
+
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  path:
+    description: "Source directory (or file) to scan"
+    required: false
+    default: "programs"
+  format:
+    description: "Output format: text, json, or sarif"
+    required: false
+    default: "sarif"
+  fail-on:
+    description: "Fail the job when findings at or above this severity are present (critical|high|medium|low|info|none)"
+    required: false
+    default: "none"
+  args:
+    description: "Additional arguments passed to `sat analyze src` (e.g. `--config sat.toml`)"
+    required: false
+    default: ""
+
+outputs:
+  sarif-file:
+    description: "Path to the generated SARIF file (when format=sarif)"
+    value: ${{ steps.scan.outputs.sarif }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ${{ github.action_path }}
+
+    - name: Build sat
+      shell: bash
+      run: cargo install --path "${{ github.action_path }}/crates/sat" --locked
+
+    - name: Scan
+      id: scan
+      shell: bash
+      run: |
+        set -euo pipefail
+        sat analyze src "${{ inputs.path }}" \
+          --format "${{ inputs.format }}" \
+          --fail-on "${{ inputs.fail-on }}" \
+          ${{ inputs.args }}
+        if [ "${{ inputs.format }}" = "sarif" ]; then
+          echo "sarif=${{ github.workspace }}/sat-results.sarif" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload SARIF to Code Scanning
+      if: ${{ always() && inputs.format == 'sarif' }}
+      uses: github/codeql-action/upload-sarif@v4
+      continue-on-error: true
+      with:
+        sarif_file: sat-results.sarif
