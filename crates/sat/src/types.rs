@@ -23,6 +23,33 @@ impl std::fmt::Display for Severity {
     }
 }
 
+impl Severity {
+    /// Parse a severity name (case-insensitive): `critical`, `high`, `medium`,
+    /// `low`, `info`/`informational`. Also accepts `none`/`off` → `None`
+    /// (used by `--fail-on none` to disable gating).
+    pub fn parse(s: &str) -> Option<Severity> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "critical" | "crit" => Some(Severity::Critical),
+            "high" => Some(Severity::High),
+            "medium" | "med" => Some(Severity::Medium),
+            "low" => Some(Severity::Low),
+            "info" | "informational" => Some(Severity::Informational),
+            _ => None,
+        }
+    }
+
+    /// Lowercase wire name (JSON/config).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Critical => "critical",
+            Severity::High => "high",
+            Severity::Medium => "medium",
+            Severity::Low => "low",
+            Severity::Informational => "informational",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
     pub id: String,

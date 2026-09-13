@@ -1538,6 +1538,7 @@ fn expr_contains_lamports(expr: &syn::Expr) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     path: Option<&str>,
     format: &str,
@@ -1545,10 +1546,16 @@ pub fn run(
     tx_report: Option<&str>,
     expectations: Option<&str>,
     fp_suppressions: Option<&str>,
+    config_path: Option<&str>,
+    fail_on: Option<&str>,
 ) -> Result<()> {
-    ui::print_banner();
+    // Machine formats emit only the payload on stdout (no banner/notices).
+    let machine = format == "json" || format == "sarif";
+    if !machine {
+        ui::print_banner();
+    }
 
-    if format != "text" && format != "sarif" {
+    if format != "text" && format != "sarif" && format != "json" {
         ui::print_warning(&format!("Unknown format '{format}', defaulting to text."));
     }
 
@@ -1556,8 +1563,12 @@ pub fn run(
         ui::print_notice("Expectations export requested for native programs.");
     }
 
+    let config = crate::config::Config::load(config_path)?;
+
     let src_path = path.map(PathBuf::from).unwrap_or_else(find_default_source_path);
-    ui::print_notice(&format!("Source path: {}", src_path.display()));
+    if !machine {
+        ui::print_notice(&format!("Source path: {}", src_path.display()));
+    }
 
     if let Some(report) = tx_report {
         ui::print_notice(&format!("Transaction report: {report}"));
@@ -1569,12 +1580,20 @@ pub fn run(
         crate::calibrate::apply_suppressions(&mut output.findings, supp_path, &src_path.to_string_lossy())?;
     }
 
+    config.apply(&mut output.findings);
+
     if output.parsed_files.is_empty() {
-        ui::print_warning("No Rust source files found. Is this an Anchor workspace?");
+        if machine {
+            eprintln!("sat: no Rust source files found");
+        } else {
+            ui::print_warning("No Rust source files found. Is this an Anchor workspace?");
+        }
         return Ok(());
     }
 
-    ui::print_notice(&format!("Scanning {} source file(s)...", output.parsed_files.len()));
+    if !machine {
+        ui::print_notice(&format!("Scanning {} source file(s)...", output.parsed_files.len()));
+    }
 
     if let Some(out) = expectations {
         let had_native = output.parsed_files.iter().any(|(file, _)| native::frontend::has_native_marker(file));
@@ -1588,8 +1607,15 @@ pub fn run(
     if format == "sarif" {
         let output_path = "sat-results.sarif";
         sarif::export_sarif(&output.findings, "program", output_path)?;
-        ui::print_success(&format!("Exported {} finding(s) to {output_path}", output.findings.len()));
-        return Ok(());
+        if !machine {
+            ui::print_success(&format!("Exported {} finding(s) to {output_path}", output.findings.len()));
+        }
+        return finish(&output.findings, config.fail_on(fail_on));
+    }
+
+    if format == "json" {
+        print!("{}", crate::json::render_json(&output.findings, "program", &src_path.to_string_lossy()));
+        return finish(&output.findings, config.fail_on(fail_on));
     }
 
     if triage {
@@ -1601,6 +1627,18 @@ pub fn run(
     }
     render::render_summary(&output.findings);
 
+    finish(&output.findings, config.fail_on(fail_on))
+}
+
+/// Apply the CI gate: when `threshold` is set and any finding meets it, exit
+/// non-zero (2) so pipelines fail. `None` threshold is a no-op.
+fn finish(findings: &[Finding], threshold: Option<Severity>) -> Result<()> {
+    if let Some(t) = threshold
+        && crate::config::fails(findings, t)
+    {
+        eprintln!("sat: findings at or above `{t}` severity present — failing (exit 2).");
+        std::process::exit(2);
+    }
     Ok(())
 }
 

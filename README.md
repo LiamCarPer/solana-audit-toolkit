@@ -32,7 +32,7 @@ Parses an Anchor IDL JSON to build a state-machine model of the contract.
 - Builds a directed state transition graph
 - Detects: **reinitialization attacks**, **state lockouts**, **missing access control**, **discriminator collisions**, **missing initializers**
 
-### `sat analyze src [PATH] [--format text|sarif] [--triage] [--tx-report PATH]`
+### `sat analyze src [PATH] [--format text|json|sarif] [--triage] [--tx-report PATH] [--config sat.toml] [--fail-on SEV]`
 
 Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` structures.
 
@@ -62,7 +62,18 @@ Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` 
 
 **Cross-tool:** `--tx-report <json>` ingests transaction analysis reports from [rust-security-toolkit](https://github.com/LiamCarPer/rust-security-toolkit) and flags runtime signer/writable mismatches against declared constraints.
 
-**CI:** `--format sarif` exports to `sat-results.sarif` for GitHub Code Scanning.
+**CI:** `--format sarif` exports to `sat-results.sarif` for GitHub Code Scanning; `--format json` prints a machine-readable report to stdout. `--fail-on <critical|high|medium|low|info|none>` exits non-zero (2) when any finding is at or above the threshold, so pipelines gate automatically.
+
+**Configuration (`sat.toml`):** tune the scan without recompiling — discovered from the working directory or passed via `--config`:
+
+```toml
+fail_on = "high"                     # default threshold (CLI --fail-on wins)
+exclude = ["tests/", "migrations/"]  # drop findings whose location contains these
+disabled_rules = ["SAT026"]          # rule ids to drop
+
+[severity_overrides]
+SAT012 = "low"                       # remap a rule's severity
+```
 
 **Bug bounty triage:** `--triage` suppresses the structural summaries and prints a prioritized queue with confidence, affected accounts, and the first manual verification step.
 

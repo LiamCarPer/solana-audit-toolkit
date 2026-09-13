@@ -5,6 +5,7 @@ mod accounting;
 mod analyzer;
 mod audit;
 mod calibrate;
+mod config;
 mod cpi;
 mod deserialization;
 mod fuzzer;
@@ -13,6 +14,7 @@ mod fuzzer_seeds;
 mod fuzzer_token2022;
 mod idl;
 mod init_guard;
+mod json;
 mod native;
 mod pda;
 mod poc;
@@ -129,7 +131,7 @@ enum AnalyzeTarget {
     Src {
         /// Path to the source directory or file (defaults to ./programs/)
         path: Option<String>,
-        /// Output format: text or sarif
+        /// Output format: text, json, or sarif
         #[arg(long, default_value = "text")]
         format: String,
         /// Show only prioritized findings with first manual verification step
@@ -144,6 +146,13 @@ enum AnalyzeTarget {
         /// Filter confirmed-FP findings from a `sat calibrate` suppression export
         #[arg(long)]
         fp_suppressions: Option<String>,
+        /// Path to a `sat.toml` config (defaults to ./sat.toml when present)
+        #[arg(long)]
+        config: Option<String>,
+        /// Exit non-zero when findings at this severity or above are present
+        /// (critical|high|medium|low|info|none)
+        #[arg(long)]
+        fail_on: Option<String>,
     },
 }
 
@@ -173,14 +182,18 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Analyze { target } => match target {
             AnalyzeTarget::Idl { path } => idl::run(path.as_deref()),
-            AnalyzeTarget::Src { path, format, triage, tx_report, expectations, fp_suppressions } => analyzer::run(
-                path.as_deref(),
-                &format,
-                triage,
-                tx_report.as_deref(),
-                expectations.as_deref(),
-                fp_suppressions.as_deref(),
-            ),
+            AnalyzeTarget::Src { path, format, triage, tx_report, expectations, fp_suppressions, config, fail_on } => {
+                analyzer::run(
+                    path.as_deref(),
+                    &format,
+                    triage,
+                    tx_report.as_deref(),
+                    expectations.as_deref(),
+                    fp_suppressions.as_deref(),
+                    config.as_deref(),
+                    fail_on.as_deref(),
+                )
+            }
         },
         Commands::Fuzz { action } => match action {
             FuzzAction::Init => fuzzer::init(),
