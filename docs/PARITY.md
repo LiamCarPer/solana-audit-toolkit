@@ -96,15 +96,58 @@ dependency versions (mirror the target `Cargo.toml`, as `sat fuzz` does) and
 implement the adapter that maps scenario ops to that program's instructions and
 state layout.
 
+## P2.5 — target harness generator (`parity emit-harness`)
+
+Real-target adapters are protocol-specific, so the tool scaffolds the crate and
+leaves four clearly marked pieces for the author (the AI):
+
+```bash
+parity emit-harness --program-dir programs/klend --name klend --out klend-harness
+```
+
+The generated crate:
+
+- is its own workspace root (won't join the target or parity workspace),
+- **mirrors the target's dependency versions** — `anchor-lang`, `solana-program`,
+  `solana-program-test`, `solana-sdk`, `spl-token` — read from the target manifest
+  *and* its `[workspace.dependencies]` (workspace inheritance supported), so it
+  builds in the target's own toolchain,
+- path-depends on the target with `no-entrypoint`,
+- emits a `Trace`-shaped JSON matching `parity::Trace` exactly.
+
+### The adapter contract (the four TODOs)
+
+1. `PROGRAM_ID` — the target's on-chain id (`declare_id!` value).
+2. `seed_accounts` — create/seed the accounts each op touches (reserve, vault,
+   user, oracle) with the target's real layout.
+3. `build_op` — map a scenario `Op` to a target `Instruction` (account metas +
+   serialized args). Return `Err` for unsupported ops so the engine reports a
+   result divergence.
+4. `observe` — read target state into the canonical `Observables`
+   (`total_deposits`, `total_borrows`, `total_shares`, `vault_balance`,
+   `user_shares`, `user_balance`, `price`).
+
+Then: `cargo run` the harness with `--scenario`, and feed the trace to
+`parity run --actual-trace`.
+
+### Target toolchain note
+
+Some audited targets pin old Solana stacks (e.g. Kamino klend: `solana ~1.17`,
+`anchor 0.29`, `rustc 1.74.1` via `rust-toolchain.toml`). The generator mirrors
+those versions so the harness builds **in the target's environment**; it cannot
+be built in a workspace pinned to a newer Agave train. Build/run the generated
+harness where the target's toolchain is available.
+
 ## Roadmap
 
 - **P1 (done):** engine + lending reference model + invariants + reports.
 - **P2 (done):** trace bridge (`Trace`/`TraceStep`, `compare_with_trace`) + a
   `solana-program-test` harness running a real program end to end.
-- **P2.5 — generator:** `parity emit-harness` to scaffold an adapter for a real
-  target (mirroring its dep versions like `sat fuzz`).
-- **P3 — real adapters:** Kamino vs Solend/Marginfi lending adapters, so
-  `parity run --target kamino --target solend` diffs two live programs.
+- **P2.5 (done):** `parity emit-harness` scaffolds a target adapter, mirroring
+  the target's dependency versions and leaving four AI-fillable TODOs.
+- **P3 — real adapters:** fill the adapter for a live lending target (Kamino
+  klend / Solend / Marginfi) and diff it against the reference model. Requires
+  building the generated harness under the target's own toolchain.
 - **P4 — fork mode:** adversarial sequences (flash-loan → oracle move → borrow)
   against forked mainnet state via RPC, reusing `rts` simulation.
 

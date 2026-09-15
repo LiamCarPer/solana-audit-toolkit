@@ -14,6 +14,7 @@
 //!
 //! See `docs/PARITY.md` for the design and roadmap.
 
+pub mod emit;
 pub mod engine;
 pub mod invariants;
 pub mod model;

@@ -52,6 +52,18 @@ enum Command {
         #[arg(long, default_value = "parity-scenario.json")]
         out: String,
     },
+    /// Scaffold a `solana-program-test` harness crate for a real target program.
+    EmitHarness {
+        /// Path to the target program directory (containing Cargo.toml).
+        #[arg(long)]
+        program_dir: String,
+        /// Target name (used in the crate/model labels).
+        #[arg(long)]
+        name: String,
+        /// Output directory for the generated harness crate.
+        #[arg(long)]
+        out: String,
+    },
 }
 
 fn parse_rounding(s: &str) -> Result<Rounding> {
@@ -179,6 +191,21 @@ fn main() -> Result<()> {
             std::fs::write(&out, scenario.to_json()).with_context(|| format!("failed to write {out}"))?;
             println!("Wrote starter scenario to {out}");
             println!("Edit ops/invariants (or have the AI author them), then: parity run --scenario {out}");
+            Ok(())
+        }
+        Command::EmitHarness { program_dir, name, out } => {
+            let dir = Path::new(&program_dir);
+            if !dir.join("Cargo.toml").exists() {
+                anyhow::bail!("{program_dir} does not contain a Cargo.toml");
+            }
+            parity::emit::emit(dir, &name, Path::new(&out))?;
+            let versions = parity::emit::read_target_versions(dir)?;
+            println!("Wrote harness crate for `{name}` to {out}");
+            println!(
+                "Mirrored versions: anchor-lang={:?} solana-program={:?} solana-program-test={:?}",
+                versions.anchor_lang, versions.solana_program, versions.solana_program_test
+            );
+            println!("Next: fill the four TODOs in {out}/src/main.rs, build, and run against a scenario.");
             Ok(())
         }
     }

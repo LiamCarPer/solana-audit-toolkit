@@ -185,6 +185,9 @@ cargo run -p parity -- run --scenario parity-scenario.json
 # differential against a REAL program: a solana-program-test harness records a
 # canonical trace; parity diffs it against the reference model
 cargo run -p parity -- run --scenario parity-scenario.json --actual-trace trace.json
+
+# scaffold a harness for a real target (mirrors its dependency versions)
+cargo run -p parity -- emit-harness --program-dir programs/klend --name klend --out klend-harness
 ```
 
 A reference harness (`crates/parity/fixtures/lending-harness/`) runs a tiny lending program in `solana-program-test` and emits a trace — the correct variant diffs CLEAN, the buggy one DIVERGED. See `docs/PARITY.md` for the design and roadmap (real target adapters, fork mode).
