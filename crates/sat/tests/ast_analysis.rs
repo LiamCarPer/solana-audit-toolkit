@@ -863,7 +863,8 @@ fn test_sarif_windows_path_location_parses_drive_letter() {
     let content = fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
     let physical = &parsed["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
-    assert_eq!(physical["artifactLocation"]["uri"], "C:\\repo\\src\\lib.rs");
+    // Windows separators/colon are percent-encoded so the URI is RFC 3986 valid.
+    assert_eq!(physical["artifactLocation"]["uri"], "C%3A%5Crepo%5Csrc%5Clib.rs");
     assert_eq!(physical["region"]["startLine"], 42);
 }
 
@@ -890,8 +891,8 @@ fn test_sarif_location_without_line_omits_region_line() {
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
     let physical = &parsed["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
     assert_eq!(
-        physical["artifactLocation"]["uri"], "Sysvar: rent (SysvarRent111111111111111111111111111111111)",
-        "locations without a line fall back to the whole string as the URI"
+        physical["artifactLocation"]["uri"], "Sysvar%3A%20rent%20(SysvarRent111111111111111111111111111111111)",
+        "locations without a line fall back to the whole string, percent-encoded to a valid URI"
     );
     assert!(physical["region"].get("startLine").is_none(), "no startLine should be emitted without a line number");
 }
@@ -1629,4 +1630,34 @@ fn test_native_tx_report_normalized_name_match() {
 
     let findings = sat::tx_report::check_native_tx_report_correlation(&program, report_path.to_str().unwrap());
     assert!(findings.is_empty(), "case-insensitive normalized names should match: {findings:#?}");
+}
+
+/// Regression: a non-file location with a colon (`Token-2022 program: <id>`)
+/// must produce an RFC-3986-valid URI or Code Scanning rejects the SARIF.
+#[test]
+fn test_sarif_non_file_location_is_valid_uri() {
+    use sat::sarif;
+    use sat::types::Finding;
+    use std::fs;
+
+    let findings = vec![Finding {
+        id: "SAT-001".to_string(),
+        title: "Token-2022 Usage Detected".to_string(),
+        severity: Severity::Informational,
+        description: "Test finding".to_string(),
+        location: Some("Token-2022 program: TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb".to_string()),
+        suggestion: None,
+    }];
+
+    let dir = tempfile::tempdir().unwrap();
+    let output_path = dir.path().join("sat_test_token2022.json");
+    sarif::export_sarif(&findings, "test_program", output_path.to_str().unwrap()).unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_str(&fs::read_to_string(&output_path).unwrap()).unwrap();
+    let uri = parsed["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+        .as_str()
+        .unwrap();
+    let first_segment = uri.split('/').next().unwrap();
+    assert!(!first_segment.contains(':'), "URI first segment must not contain a colon (invalid URI): {uri}");
+    assert!(uri.starts_with("Token-2022%20program%3A"), "colon+space must be percent-encoded: {uri}");
 }

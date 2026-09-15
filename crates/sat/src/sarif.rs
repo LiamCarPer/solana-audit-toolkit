@@ -219,10 +219,46 @@ fn location_to_uri_and_line(loc: &str) -> (String, Option<u32>) {
         let followed_by_boundary = digits_end == bytes.len() || bytes[digits_end] == b' ' || bytes[digits_end] == b'(';
         if has_digits && followed_by_boundary {
             let line = loc[digits_start..digits_end].parse().ok();
-            return (loc[..i].to_string(), line);
+            return (encode_uri(&loc[..i]), line);
         }
     }
-    (loc.to_string(), None)
+    (encode_uri(loc), None)
+}
+
+/// Percent-encode a string so it is a valid SARIF `artifactLocation.uri`
+/// (RFC 3986). Non-file locations such as `Token-2022 program: <id>` contain a
+/// colon that is illegal in the first URI segment; Code Scanning rejects the
+/// whole SARIF upload otherwise.
+fn encode_uri(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        let safe = b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'/' | b'.'
+                    | b'-'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b'@'
+            );
+        if safe {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 pub fn export_sarif(findings: &[Finding], _program_name: &str, output_path: &str) -> Result<()> {
