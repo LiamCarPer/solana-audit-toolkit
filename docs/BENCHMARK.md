@@ -1,6 +1,6 @@
 # Benchmark: `sat` vs. Real Audited Programs
 
-**Date of run:** 2026-08-08 · **Tool version:** `sat` v0.1.0 (`cargo run --quiet -- version`)
+**Date of run:** 2026-08-08 · **Tool version:** `sat` v0.1.0 (`cargo run --quiet --bin sat -- version`)
 
 This benchmark runs `sat analyze src` against real, deployed Solana programs with
 documented audit/hack histories — code the tool has never seen — and classifies
@@ -28,7 +28,7 @@ cross-instruction flows — those are documented limitations, not failures.
 ## Methodology
 
 - **Command** (per target, from the repo root; never a whole-workspace scan):
-  `cargo run --quiet -- analyze src <target/src>`
+  `cargo run --quiet --bin sat -- analyze src <target/src>`
 - Full outputs are committed in [`bench/`](../bench/) (`*.out` files) for
   reproducibility; SARIF export verified (`--format sarif` → `sat-results.sarif`).
 - **IDL gap:** none of the cloned repos ship `target/idl/`, and building IDLs
@@ -139,22 +139,22 @@ Maintained reference code; expected mostly-clean. 7 programs analyzed.
 ```sh
 # vulnerable Cashio (pre-hack, the exploited code)
 git -C bench/programs/cashio worktree add bench/programs/cashio-vuln a51c3c59
-cargo run --quiet -- analyze src bench/programs/cashio-vuln/programs/bankman/src > bench/cashio-vuln-bankman.out
-cargo run --quiet -- analyze src bench/programs/cashio-vuln/programs/brrr/src      > bench/cashio-vuln-brrr.out
+cargo run --quiet --bin sat -- analyze src bench/programs/cashio-vuln/programs/bankman/src > bench/cashio-vuln-bankman.out
+cargo run --quiet --bin sat -- analyze src bench/programs/cashio-vuln/programs/brrr/src      > bench/cashio-vuln-brrr.out
 
 # post-fix Cashio
-cargo run --quiet -- analyze src bench/programs/cashio/programs/bankman/src       > bench/cashio-fixed-bankman.out
-cargo run --quiet -- analyze src bench/programs/cashio/programs/brrr/src          > bench/cashio-fixed-brrr.out
+cargo run --quiet --bin sat -- analyze src bench/programs/cashio/programs/bankman/src       > bench/cashio-fixed-bankman.out
+cargo run --quiet --bin sat -- analyze src bench/programs/cashio/programs/brrr/src          > bench/cashio-fixed-brrr.out
 
 # reference examples
 for p in basic-0/programs/basic-0 basic-1/programs/basic-1 basic-2/programs/basic-2 \
          basic-3/programs/puppet basic-3/programs/puppet-master basic-4/programs/basic-4 \
          basic-5/programs/basic-5; do
-  cargo run --quiet -- analyze src "bench/programs/anchor-examples/examples/tutorial/$p/src"
+  cargo run --quiet --bin sat -- analyze src "bench/programs/anchor-examples/examples/tutorial/$p/src"
 done
 
 # non-Anchor exclusion
-cargo run --quiet -- analyze src bench/programs/mango-v3/program/src               > bench/mango-v3.out
+cargo run --quiet --bin sat -- analyze src bench/programs/mango-v3/program/src               > bench/mango-v3.out
 ```
 
 Target commit hashes: Cashio vulnerable `a51c3c59`, Cashio post-fix `3f2c353`,
