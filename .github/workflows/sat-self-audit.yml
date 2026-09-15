@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
+  workflow_dispatch:
 
 jobs:
   self-audit:
