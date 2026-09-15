@@ -20,6 +20,6 @@ pub mod model;
 pub mod report;
 pub mod scenario;
 
-pub use engine::{ComparisonReport, Divergence, Violation, compare};
+pub use engine::{ComparisonReport, Divergence, Violation, compare, compare_with_trace};
 pub use model::{LendingModel, ProgramModel, Rounding};
-pub use scenario::{Config, Invariant, Observables, Op, Role, Scenario};
+pub use scenario::{Config, Invariant, Observables, Op, Role, Scenario, Trace, TraceStep};

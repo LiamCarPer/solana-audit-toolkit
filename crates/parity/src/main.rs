@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 
 use parity::model::Rounding;
 use parity::scenario::{AccountSpec, Config, Invariant, Op, Role, Scenario};
-use parity::{LendingModel, ProgramModel, compare, report};
+use parity::{LendingModel, ProgramModel, report};
 
 #[derive(Parser)]
 #[command(name = "parity", version, about = "Differential/behavioral engine for Solana protocol hunts")]
@@ -29,6 +29,10 @@ enum Command {
         /// Candidate's share-mint rounding on deposit.
         #[arg(long, default_value = "down")]
         candidate_deposit_rounding: String,
+        /// Differential against a recorded real-program trace (from `parity emit-harness`)
+        /// instead of an in-process candidate. This is the P2 path.
+        #[arg(long)]
+        actual_trace: Option<String>,
         /// Output report file (defaults to parity-report.md / .json).
         #[arg(long)]
         out: Option<String>,
@@ -65,11 +69,22 @@ fn run_and_report(
     out: Option<&str>,
     format: &str,
 ) -> Result<bool> {
-    let report_data = compare(scenario, expected, actual);
+    let report_data = parity::compare(scenario, expected, actual);
+    write_report(&report_data, scenario, out, format)
+}
+
+/// Write a comparison report and print the one-line verdict. Returns `true`
+/// when the run is clean (no divergence, no violation).
+fn write_report(
+    report_data: &parity::ComparisonReport,
+    scenario: &Scenario,
+    out: Option<&str>,
+    format: &str,
+) -> Result<bool> {
     let (body, default_name) = if format.eq_ignore_ascii_case("json") {
-        (report::render_json(&report_data, scenario), "parity-report.json")
+        (report::render_json(report_data, scenario), "parity-report.json")
     } else {
-        (report::render_markdown(&report_data, scenario), "parity-report.md")
+        (report::render_markdown(report_data, scenario), "parity-report.md")
     };
 
     let path = out.unwrap_or(default_name);
@@ -115,19 +130,35 @@ fn demo_scenario() -> Scenario {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Run { scenario, candidate_withdraw_rounding, candidate_deposit_rounding, out, format } => {
+        Command::Run {
+            scenario,
+            candidate_withdraw_rounding,
+            candidate_deposit_rounding,
+            actual_trace,
+            out,
+            format,
+        } => {
             let text =
                 std::fs::read_to_string(&scenario).with_context(|| format!("failed to read scenario {scenario}"))?;
             let scenario = Scenario::from_json(&text).context("invalid scenario JSON")?;
 
-            let w = parse_rounding(&candidate_withdraw_rounding)?;
-            let d = parse_rounding(&candidate_deposit_rounding)?;
-
             // Reference: protocol-favourable rounding (ceil shares on withdraw).
             let mut expected = LendingModel::reference(&scenario).named("reference");
-            let mut actual = LendingModel::with_rounding(&scenario, w, d).named("candidate");
 
-            let clean = run_and_report(&scenario, &mut expected, &mut actual, out.as_deref(), &format)?;
+            let report_data = if let Some(trace_path) = actual_trace {
+                // P2: diff the reference against a recorded real-program trace.
+                let trace_text = std::fs::read_to_string(&trace_path)
+                    .with_context(|| format!("failed to read trace {trace_path}"))?;
+                let trace = parity::Trace::from_json(&trace_text).context("invalid trace JSON")?;
+                parity::compare_with_trace(&scenario, &mut expected, &trace)
+            } else {
+                let w = parse_rounding(&candidate_withdraw_rounding)?;
+                let d = parse_rounding(&candidate_deposit_rounding)?;
+                let mut actual = LendingModel::with_rounding(&scenario, w, d).named("candidate");
+                parity::compare(&scenario, &mut expected, &mut actual)
+            };
+
+            let clean = write_report(&report_data, &scenario, out.as_deref(), &format)?;
             if !clean {
                 std::process::exit(2);
             }

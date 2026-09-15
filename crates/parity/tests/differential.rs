@@ -3,7 +3,7 @@
 
 use parity::model::Rounding;
 use parity::scenario::{AccountSpec, Config, Invariant, Op, Role, Scenario};
-use parity::{LendingModel, compare};
+use parity::{LendingModel, ProgramModel, compare};
 
 fn lending_scenario(ops: Vec<Op>) -> Scenario {
     Scenario {
@@ -98,4 +98,59 @@ fn agreed_rejection_is_parity() {
 
     assert!(report.is_clean(), "identical rejections are parity: {:?}", report.divergences);
     assert_eq!(report.agreed_errors, 1);
+}
+
+// ── P2: differential against a recorded real-program trace ───────────────────
+
+use parity::scenario::{Trace, TraceStep};
+
+fn scenario_ops() -> Vec<Op> {
+    vec![
+        Op::Deposit { user: "user".to_string(), amount: 1_000 },
+        Op::Deposit { user: "user".to_string(), amount: 1_000 },
+        Op::Borrow { user: "user".to_string(), amount: 500 },
+        Op::Accrue { seconds: 1_000 },
+        Op::Withdraw { user: "user".to_string(), amount: 333 },
+    ]
+}
+
+/// Build a trace by executing the reference model (the "ideal" recorded run).
+fn trace_from_reference(scenario: &Scenario, model: &str) -> Trace {
+    let mut reference = LendingModel::reference(scenario);
+    let mut steps = Vec::new();
+    for (i, op) in scenario.ops.iter().enumerate() {
+        let error = reference.apply(op).err();
+        steps.push(TraceStep { op_index: i, observables: reference.observe(), error });
+    }
+    Trace { scenario: scenario.name.clone(), model: model.to_string(), steps }
+}
+
+/// A trace that matches the reference is parity (this is the correct program).
+#[test]
+fn trace_matching_reference_is_clean() {
+    let scenario = lending_scenario(scenario_ops());
+    let trace = trace_from_reference(&scenario, "lending-ok");
+    let mut reference = LendingModel::reference(&scenario);
+    let report = parity::compare_with_trace(&scenario, &mut reference, &trace);
+    assert!(report.is_clean(), "correct program must be parity: {:?}", report.divergences);
+}
+
+/// A trace whose final withdraw burned fewer shares than the reference (the
+/// real buggy program) must be flagged — this is the P2 end-to-end shape.
+#[test]
+fn trace_with_rounding_bug_is_detected() {
+    let scenario = lending_scenario(scenario_ops());
+    let mut trace = trace_from_reference(&scenario, "lending-bug");
+    // Mutate the last step to the floor-rounded share count a buggy program
+    // would record (fewer shares burned => more shares retained).
+    let last = trace.steps.last_mut().unwrap();
+    last.observables.total_shares += 1;
+    last.observables.user_shares += 1;
+
+    let mut reference = LendingModel::reference(&scenario);
+    let report = parity::compare_with_trace(&scenario, &mut reference, &trace);
+
+    assert!(report.diverged(), "a divergent real-program trace must be flagged");
+    assert_eq!(report.first_divergence_op, Some(4));
+    assert_eq!(report.actual_model, "lending-bug");
 }

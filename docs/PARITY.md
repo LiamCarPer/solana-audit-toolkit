@@ -1,6 +1,6 @@
 # `parity` — Differential/Behavioral Engine
 
-**Status:** P1 (engine + reference model + invariants) shipped.
+**Status:** P2 (real-program execution via `solana-program-test` trace) shipped.
 
 ## Why this exists
 
@@ -64,20 +64,49 @@ parity run --scenario s.json --candidate-withdraw-rounding down --format json
 parity init --out parity-scenario.json
 ```
 
+## P2 — differential against a real program
+
+The engine can consume a **recorded execution trace** of a real program
+(emitted by a `solana-program-test` harness) instead of an in-process model:
+
+```bash
+parity run --scenario parity-scenario.json --actual-trace trace.json
+```
+
+A reference harness lives in `crates/parity/fixtures/lending-harness/`
+(standalone crate, pinned to the `solana-program-test` 3.x train; excluded from
+the workspace because its Solana pin set conflicts with the workspace's agave
+4.1.2 graph). It registers two variants of a tiny lending program — correct
+(ceil shares on withdraw) and buggy (floor) — runs the demo scenario, and writes
+a canonical `parity::Trace`:
+
+```bash
+cd crates/parity/fixtures/lending-harness
+cargo build
+./target/debug/lending-harness --program ok  --out trace-ok.json    # correct
+./target/debug/lending-harness --program bug --out trace-bug.json   # buggy
+
+cd ../../..
+cargo run -p parity -- run --scenario demo-scenario.json --actual-trace trace-ok.json   # CLEAN
+cargo run -p parity -- run --scenario demo-scenario.json --actual-trace trace-bug.json  # DIVERGED (exit 2)
+```
+
+For a **real target**, generate the harness against the target program's own
+dependency versions (mirror the target `Cargo.toml`, as `sat fuzz` does) and
+implement the adapter that maps scenario ops to that program's instructions and
+state layout.
+
 ## Roadmap
 
 - **P1 (done):** engine + lending reference model + invariants + reports.
-  Self-test: `parity demo` and `tests/differential.rs` inject a rounding bug and
-  assert the engine catches it.
-- **P2 — cross-implementation parity:** a `ProgramAdapter` trait that builds
-  real instructions and reads real state, plus 2 adapters for one primitive
-  (lending: Kamino vs Solend/Marginfi — clones available). `parity run` gains
-  `--target kamino --target solend`.
-- **P3 — `solana-program-test` backend:** generate a runnable harness crate
-  (reusing `sat fuzz` generation: `ProgramTest`, account seeding, sequence
-  execution) so `parity` executes the *real* program, not a model.
-- **P4 — fork mode:** run adversarial sequences (flash-loan → oracle move →
-  borrow) against forked mainnet state via RPC, reusing `rts` simulation.
+- **P2 (done):** trace bridge (`Trace`/`TraceStep`, `compare_with_trace`) + a
+  `solana-program-test` harness running a real program end to end.
+- **P2.5 — generator:** `parity emit-harness` to scaffold an adapter for a real
+  target (mirroring its dep versions like `sat fuzz`).
+- **P3 — real adapters:** Kamino vs Solend/Marginfi lending adapters, so
+  `parity run --target kamino --target solend` diffs two live programs.
+- **P4 — fork mode:** adversarial sequences (flash-loan → oracle move → borrow)
+  against forked mainnet state via RPC, reusing `rts` simulation.
 
 ## Honest limitations
 

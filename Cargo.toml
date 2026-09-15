@@ -1,3 +1,4 @@
 [workspace]
 members = ["crates/sat", "crates/parity"]
+exclude = ["crates/parity/fixtures"]
 resolver = "2"

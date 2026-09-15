@@ -8,3 +8,5 @@ rust_out
 # local scan/calibration state
 /.sat-watch/
 /.sat-calib/
+# standalone parity harness fixture builds
+/crates/parity/fixtures/*/target/

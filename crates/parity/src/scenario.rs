@@ -30,7 +30,7 @@ pub struct AccountSpec {
     pub name: String,
     /// Initial integer quantity (lamports/token base units/shares).
     #[serde(default)]
-    pub initial: u128,
+    pub initial: u64,
 }
 
 /// A protocol operation in abstract, implementation-independent terms.
@@ -38,17 +38,17 @@ pub struct AccountSpec {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     /// Supply `amount` of the base asset from `user`.
-    Deposit { user: String, amount: u128 },
+    Deposit { user: String, amount: u64 },
     /// Redeem `amount` of the base asset to `user`.
-    Withdraw { user: String, amount: u128 },
+    Withdraw { user: String, amount: u64 },
     /// Borrow `amount` of the base asset to `user`.
-    Borrow { user: String, amount: u128 },
+    Borrow { user: String, amount: u64 },
     /// Repay `amount` of the base asset from `user`.
-    Repay { user: String, amount: u128 },
+    Repay { user: String, amount: u64 },
     /// Accrue interest for `seconds` at the model's configured rate.
     Accrue { seconds: u64 },
     /// Set the oracle price (scaled integer).
-    SetPrice { price: u128 },
+    SetPrice { price: u64 },
 }
 
 /// Protocol invariants checked after every operation. These encode economics,
@@ -101,13 +101,13 @@ pub struct Scenario {
 pub struct Config {
     /// Oracle price scale (assets per unit).
     #[serde(default = "default_price")]
-    pub price: u128,
+    pub price: u64,
     /// Interest rate per second in basis points (of 10_000).
     #[serde(default)]
     pub rate_bps_per_second: u64,
 }
 
-fn default_price() -> u128 {
+fn default_price() -> u64 {
     1
 }
 
@@ -134,19 +134,19 @@ impl Scenario {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Observables {
     /// Total accounted deposits (base units).
-    pub total_deposits: u128,
+    pub total_deposits: u64,
     /// Total accounted borrows (base units).
-    pub total_borrows: u128,
+    pub total_borrows: u64,
     /// Total outstanding shares (accounting units).
-    pub total_shares: u128,
+    pub total_shares: u64,
     /// Recorded vault token balance (base units).
-    pub vault_balance: u128,
+    pub vault_balance: u64,
     /// The user's share balance.
-    pub user_shares: u128,
+    pub user_shares: u64,
     /// The user's wallet/collateral balance.
-    pub user_balance: u128,
+    pub user_balance: u64,
     /// Oracle price in effect.
-    pub price: u128,
+    pub price: u64,
 }
 
 impl Observables {
@@ -168,5 +168,38 @@ impl Observables {
         cmp!(user_balance);
         cmp!(price);
         out
+    }
+}
+
+/// One step of a recorded execution: the canonical observables after an op.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceStep {
+    /// Index into the scenario's `ops`.
+    pub op_index: usize,
+    pub observables: Observables,
+    /// Error string when the program rejected the op (parity on revert).
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A recorded execution of a scenario against a **real program** (emitted by a
+/// generated `solana-program-test` harness). This is the bridge that lets the
+/// differential engine compare a live program against the reference model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trace {
+    /// Scenario name this trace belongs to.
+    pub scenario: String,
+    /// Human label for the program that produced it (`lending-ok`, `kamino`, …).
+    pub model: String,
+    pub steps: Vec<TraceStep>,
+}
+
+impl Trace {
+    pub fn from_json(s: &str) -> anyhow::Result<Trace> {
+        Ok(serde_json::from_str(s)?)
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
     }
 }

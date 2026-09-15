@@ -84,7 +84,7 @@ impl LendingModel {
         };
         for acc in &scenario.accounts {
             if acc.role == Role::User {
-                model.user_balance = acc.initial;
+                model.user_balance = acc.initial as u128;
             }
         }
         model
@@ -121,31 +121,32 @@ impl ProgramModel for LendingModel {
     fn apply(&mut self, op: &Op) -> Result<(), String> {
         match op {
             Op::Deposit { amount, .. } => {
-                if *amount > self.user_balance {
+                if *amount as u128 > self.user_balance {
                     return Err("insufficient balance".to_string());
                 }
-                let shares = self.shares_for_deposit(*amount);
-                self.user_balance -= amount;
+                let shares = self.shares_for_deposit(*amount as u128);
+                self.user_balance -= *amount as u128;
                 self.user_shares += shares;
                 self.total_shares += shares;
-                self.total_deposits += amount;
-                self.vault_balance += amount;
+                self.total_deposits += *amount as u128;
+                self.vault_balance += *amount as u128;
                 Ok(())
             }
             Op::Withdraw { amount, .. } => {
-                let shares = self.shares_for_withdraw(*amount);
+                let shares = self.shares_for_withdraw(*amount as u128);
                 if shares > self.user_shares {
                     return Err("insufficient shares".to_string());
                 }
                 self.user_shares -= shares;
                 self.total_shares -= shares;
-                self.total_deposits = self.total_deposits.saturating_sub(*amount);
-                self.vault_balance = self.vault_balance.saturating_sub(*amount);
-                self.user_balance += amount;
+                self.total_deposits = self.total_deposits.saturating_sub(*amount as u128);
+                self.vault_balance = self.vault_balance.saturating_sub(*amount as u128);
+                self.user_balance += *amount as u128;
                 Ok(())
             }
             Op::Borrow { amount, .. } => {
-                if *amount > self.vault_balance {
+                let amount = *amount as u128;
+                if amount > self.vault_balance {
                     return Err("insufficient liquidity".to_string());
                 }
                 self.total_borrows += amount;
@@ -154,7 +155,7 @@ impl ProgramModel for LendingModel {
                 Ok(())
             }
             Op::Repay { amount, .. } => {
-                let amount = (*amount).min(self.total_borrows);
+                let amount = (*amount as u128).min(self.total_borrows);
                 self.total_borrows -= amount;
                 self.vault_balance += amount;
                 self.user_balance = self.user_balance.saturating_sub(amount);
@@ -179,12 +180,12 @@ impl ProgramModel for LendingModel {
 
     fn observe(&self) -> Observables {
         Observables {
-            total_deposits: self.total_deposits,
-            total_borrows: self.total_borrows,
-            total_shares: self.total_shares,
-            vault_balance: self.vault_balance,
-            user_shares: self.user_shares,
-            user_balance: self.user_balance,
+            total_deposits: self.total_deposits as u64,
+            total_borrows: self.total_borrows as u64,
+            total_shares: self.total_shares as u64,
+            vault_balance: self.vault_balance as u64,
+            user_shares: self.user_shares as u64,
+            user_balance: self.user_balance as u64,
             price: self.config.price,
         }
     }

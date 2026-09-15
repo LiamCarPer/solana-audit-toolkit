@@ -181,9 +181,13 @@ cargo run -p parity -- demo
 
 # run a scenario; exits 2 on divergence (CI-gateable)
 cargo run -p parity -- run --scenario parity-scenario.json
+
+# differential against a REAL program: a solana-program-test harness records a
+# canonical trace; parity diffs it against the reference model
+cargo run -p parity -- run --scenario parity-scenario.json --actual-trace trace.json
 ```
 
-See `docs/PARITY.md` for the design and the roadmap (cross-implementation parity, `program-test` backend, fork mode).
+A reference harness (`crates/parity/fixtures/lending-harness/`) runs a tiny lending program in `solana-program-test` and emits a trace — the correct variant diffs CLEAN, the buggy one DIVERGED. See `docs/PARITY.md` for the design and roadmap (real target adapters, fork mode).
 
 ## Bug Bounty Workflow
 

@@ -1,0 +1,28 @@
+[package]
+name = "lending-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Own workspace root so it stays out of the sat workspace (its Solana pins
+# conflict with the workspace's agave 4.1.2 train).
+[workspace]
+
+# Standalone (excluded from the sat workspace): this crate pins the Solana
+# `solana-program-test` 3.x train, which compiles cleanly here. Real targets
+# should mirror the target program's own dependency versions instead.
+[dependencies]
+solana-program = "3"
+solana-program-test = "3"
+solana-sdk = "3"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Reuse parity's canonical Trace/Observables types so the emitted trace is
+# guaranteed format-compatible with the engine.
+parity = { path = "../.." }
+
+[[bin]]
+name = "lending-harness"
+path = "src/main.rs"
