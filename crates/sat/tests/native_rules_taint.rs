@@ -220,3 +220,120 @@ pub struct VaultState {
     let flagged = by_rule(&findings, SAT038);
     assert!(flagged.is_empty(), "Signer-typed authority must be anchored: {findings:#?}");
 }
+
+/// A nested `#[derive(Accounts)]` bundle container field (kamino's
+/// `borrow_accounts: BorrowObligationLiquidity`) is a namespace, not an
+/// account — referencing it (even via a local) must NOT fire SAT038. Only its
+/// leaf accounts can be sources. Guards the tainted-local canonical leak.
+#[test]
+fn anchor_bundle_container_does_not_fire() {
+    let source = r#"
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod m {
+    use super::*;
+    pub fn go(ctx: Context<Go>) -> Result<()> {
+        let container = &ctx.accounts.borrow_accounts;
+        let ix = make_ix(&container.vault.key());
+        invoke(&ix, &[container.vault.clone(), ctx.accounts.token_program.to_account_info()])?;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Go<'info> {
+    pub borrow_accounts: BorrowObligationLiquidity<'info>,
+    pub token_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct BorrowObligationLiquidity<'info> {
+    /// CHECK: leaf account inside the bundle.
+    pub vault: AccountInfo<'info>,
+    pub authority: Signer<'info>,
+}
+"#;
+    let (_, findings) = run(source);
+    let flagged = by_rule(&findings, SAT038);
+    assert!(
+        flagged.iter().all(|f| !f.title.contains("borrow_accounts")),
+        "bundle container must not be a taint source: {findings:#?}"
+    );
+}
+
+// ── invoke_signed seed sink (recall + accounts-arg precision) ─────────────────
+
+/// Seeds derived from an unanchored account passed to `invoke_signed` must
+/// fire as a `Seeds` flow (a poisoned PDA).
+#[test]
+fn invoke_signed_tainted_seeds_fire() {
+    let source = r#"
+use solana_program::{
+    account_info::{next_account_info, AccountInfo},
+    entrypoint,
+    entrypoint::ProgramResult,
+    program::invoke_signed,
+    pubkey::Pubkey,
+};
+
+entrypoint!(process_instruction);
+
+pub fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    _instruction_data: &[u8],
+) -> ProgramResult {
+    let accounts_iter = &mut accounts.iter();
+    let authority = next_account_info(accounts_iter)?;
+    let target = next_account_info(accounts_iter)?;
+
+    let seeds = &[authority.key.as_ref()];
+    invoke_signed(&some_ix, &[target.clone()], &[seeds])?;
+    Ok(())
+}
+"#;
+    let (_, findings) = run(source);
+    let flagged = by_rule(&findings, SAT038);
+    assert!(
+        flagged.iter().any(|f| f.title.contains("`authority`")),
+        "a tainted invoke_signed seed must fire on the seed's source: {findings:#?}"
+    );
+}
+
+/// An unanchored account appearing only in the *accounts* argument of
+/// `invoke_signed` (not the seeds) must NOT fire — passing accounts is normal
+/// (the jito `delegate` FP class).
+#[test]
+fn invoke_signed_accounts_arg_does_not_fire() {
+    let source = r#"
+use solana_program::{
+    account_info::{next_account_info, AccountInfo},
+    entrypoint,
+    entrypoint::ProgramResult,
+    program::invoke_signed,
+    pubkey::Pubkey,
+};
+
+entrypoint!(process_instruction);
+
+pub fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    _instruction_data: &[u8],
+) -> ProgramResult {
+    let accounts_iter = &mut accounts.iter();
+    let target = next_account_info(accounts_iter)?;
+
+    let seeds = &[b"static".as_ref()];
+    invoke_signed(&some_ix, &[target.clone()], &[seeds])?;
+    Ok(())
+}
+"#;
+    let (_, findings) = run(source);
+    let flagged = by_rule(&findings, SAT038);
+    assert!(
+        flagged.iter().all(|f| !f.title.contains("`target`")),
+        "an account passed only in the CPI accounts arg must not fire: {findings:#?}"
+    );
+}

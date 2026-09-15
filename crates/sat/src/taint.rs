@@ -161,7 +161,12 @@ fn collect_sources(
         Expr::Path(p) => {
             if let Some(ident) = p.path.get_ident() {
                 if let Some(set) = tainted.get(ident.to_string().as_str()) {
-                    out.extend(set.iter().copied());
+                    // A local can be bound to canonical accounts too (the Local
+                    // arm binds every referenced account so pollution sinks can
+                    // attribute writes back). Only unanchored sources count as
+                    // value sources — a container/state account referenced via a
+                    // local is not attacker-influenced.
+                    out.extend(set.iter().copied().filter(|i| sources.contains(i)));
                 } else if let Some(acc) = account_index(ix, &ident.to_string())
                     && sources.contains(&acc)
                 {
@@ -276,8 +281,13 @@ fn scan_block(block: &syn::Block, ix: &NativeInstruction, state: &mut TaintState
                     // Bind the local to every account its initializer derives
                     // from — including CANONICAL accounts (`let data =
                     // state.data.borrow_mut()`) — so pollution sinks can
-                    // attribute writes back to the trusted account.
-                    if let syn::Pat::Ident(pi) = &l.pat {
+                    // attribute writes back to the trusted account. Unwrap a
+                    // type annotation (`let x: T = ...` is `Pat::Type`).
+                    let pat = match &l.pat {
+                        syn::Pat::Type(pt) => &*pt.pat,
+                        p => p,
+                    };
+                    if let syn::Pat::Ident(pi) = pat {
                         let mut refs = HashSet::new();
                         referenced_accounts(&init.expr, ix, &state.tainted, &mut refs);
                         if !refs.is_empty() {
@@ -334,10 +344,20 @@ fn scan_expr_sinks(e: &Expr, ix: &NativeInstruction, state: &mut TaintState, out
                 _ => String::new(),
             };
             if matches!(callee.as_str(), "invoke" | "invoke_signed" | "invoke_unchecked") {
-                for arg in &c.args {
+                let signed = callee == "invoke_signed";
+                for (idx, arg) in c.args.iter().enumerate() {
+                    // CPI plumbing: idx 0 is the `Instruction`, idx 1 the account
+                    // metas (passing accounts is normal, never attacker value).
+                    // The only privileged invoke argument is the `invoke_signed`
+                    // seed list (idx 2) — a tainted seed is a poisoned PDA.
+                    let kind = match (signed, idx) {
+                        (_, 1) => continue,
+                        (true, 0) => continue,
+                        (true, 2) => SinkKind::Seeds,
+                        _ => SinkKind::CallArg,
+                    };
                     let sources = state.sources_in(arg, ix);
                     if !sources.is_empty() {
-                        let kind = if callee == "invoke_signed" { SinkKind::Seeds } else { SinkKind::CallArg };
                         out.push(Flow { sources, kind, sink: format!("{callee}(...)") });
                     }
                 }
