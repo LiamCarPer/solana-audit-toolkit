@@ -13,6 +13,7 @@ mod fuzzer;
 mod fuzzer_layout;
 mod fuzzer_seeds;
 mod fuzzer_token2022;
+mod hunt;
 mod idl;
 mod init_guard;
 mod json;
@@ -86,6 +87,17 @@ enum Commands {
         /// Directory for scan state and clones
         #[arg(long, default_value = ".sat-watch")]
         out_dir: String,
+    },
+    /// Generate a ranked, bounty-oriented hunt brief for a program
+    Hunt {
+        /// Path to the source directory or file (same as `analyze src`)
+        path: Option<String>,
+        /// Output file (defaults to hunt-brief.md / .json)
+        #[arg(long)]
+        out: Option<String>,
+        /// Output format: md or json
+        #[arg(long, default_value = "md")]
+        format: String,
     },
     /// Run the validation-completeness (taint) engine over a native program
     Taint {
@@ -227,6 +239,7 @@ fn main() -> Result<()> {
             audit::run(path.as_deref(), Some(&out), tx_report.as_deref(), &format)
         }
         Commands::Watch { config, out_dir } => watch::run(&config, &out_dir),
+        Commands::Hunt { path, out, format } => hunt::run(path.as_deref(), out.as_deref(), &format),
         Commands::Taint { path } => taint::run(path.as_deref()),
         Commands::Accounting { path } => accounting::run(path.as_deref()),
         Commands::Calibrate { config, out } => calibrate::run(&config, Some(&out)),

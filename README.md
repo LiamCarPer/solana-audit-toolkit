@@ -119,6 +119,16 @@ Runs the full analysis and writes a professional report — a metadata header, a
 sat audit programs/vault/src --out vault-audit.html --format html
 ```
 
+### `sat hunt [PATH] [--out FILE] [--format md|json]`
+
+Turns a raw finding dump into a **ranked, bounty-oriented lead brief**: each lead is annotated with the payout class it enables, the real-world precedent (`docs/EXPLOIT_CORPUS.md`), and the first manual-verification step. Ranking is payout class × severity × confidence, with high-confidence leads separated from a low-confidence coverage map.
+
+```bash
+sat hunt programs/vault/src --out hunt.md
+```
+
+This is the triage accelerator for a hunt cycle — not an autopilot. Every lead still needs manual confirmation and a PoC before submission.
+
 ### `sat report new`
 
 Interactive CLI to create structured markdown audit findings with YAML front-matter. Auto-increments `SAT-XXX` IDs from existing files in `audit-findings/`. Outputs slugified filenames (e.g. `SAT-001-missing-signer-check.md`).

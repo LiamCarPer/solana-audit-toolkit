@@ -10,6 +10,7 @@ pub mod fuzzer;
 pub mod fuzzer_layout;
 pub mod fuzzer_seeds;
 pub mod fuzzer_token2022;
+pub mod hunt;
 pub mod idl;
 pub mod init_guard;
 pub mod json;
