@@ -1548,6 +1548,8 @@ pub fn run(
     fp_suppressions: Option<&str>,
     config_path: Option<&str>,
     fail_on: Option<&str>,
+    baseline: Option<&str>,
+    update_baseline: bool,
 ) -> Result<()> {
     // Machine formats emit only the payload on stdout (no banner/notices).
     let machine = format == "json" || format == "sarif";
@@ -1581,6 +1583,31 @@ pub fn run(
     }
 
     config.apply(&mut output.findings);
+
+    // Baseline: snapshot the accepted set, or filter down to only-new findings.
+    let src_str = src_path.to_string_lossy();
+    if update_baseline {
+        let Some(bpath) = baseline else {
+            anyhow::bail!("--update-baseline requires --baseline <PATH>");
+        };
+        let snap = crate::baseline::Baseline::from_findings(&output.findings, &src_str);
+        snap.write(bpath)?;
+        let msg = format!("Baseline written: {} signature(s) -> {bpath}", snap.signatures.len());
+        if machine {
+            eprintln!("sat: {msg}");
+        } else {
+            ui::print_notice(&msg);
+        }
+    } else if let Some(bpath) = baseline {
+        let snap = crate::baseline::Baseline::load(bpath)?;
+        let removed = crate::baseline::retain_new(&mut output.findings, &snap, &src_str);
+        let msg = format!("Baseline: {removed} known, {} new", output.findings.len());
+        if machine {
+            eprintln!("sat: {msg}");
+        } else {
+            ui::print_notice(&msg);
+        }
+    }
 
     if output.parsed_files.is_empty() {
         if machine {

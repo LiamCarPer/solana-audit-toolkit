@@ -63,7 +63,10 @@ fn signature_normalizes_locations() {
         &finding("Missing Signer: `Set::authority`", r"C:\repo\program\src\lib.rs:10 (Set::authority)"),
         r"C:\repo\program\src",
     );
-    assert_eq!(sig.location, "lib.rs:10 (Set::authority)", "source prefix must be stripped and separators normalized");
+    assert_eq!(
+        sig.location, "lib.rs (Set::authority)",
+        "source prefix stripped, separators normalized, line numbers dropped"
+    );
 }
 
 #[test]

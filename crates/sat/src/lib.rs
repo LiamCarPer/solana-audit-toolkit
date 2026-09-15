@@ -1,6 +1,7 @@
 pub mod accounting;
 pub mod analyzer;
 pub mod audit;
+pub mod baseline;
 pub mod calibrate;
 pub mod config;
 pub mod cpi;

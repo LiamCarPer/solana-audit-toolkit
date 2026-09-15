@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 mod accounting;
 mod analyzer;
 mod audit;
+mod baseline;
 mod calibrate;
 mod config;
 mod cpi;
@@ -153,6 +154,12 @@ enum AnalyzeTarget {
         /// (critical|high|medium|low|info|none)
         #[arg(long)]
         fail_on: Option<String>,
+        /// Baseline snapshot: report/gate only on findings NOT in this file
+        #[arg(long)]
+        baseline: Option<String>,
+        /// Write the current findings to the `--baseline` file (accept state)
+        #[arg(long)]
+        update_baseline: bool,
     },
 }
 
@@ -182,18 +189,29 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Analyze { target } => match target {
             AnalyzeTarget::Idl { path } => idl::run(path.as_deref()),
-            AnalyzeTarget::Src { path, format, triage, tx_report, expectations, fp_suppressions, config, fail_on } => {
-                analyzer::run(
-                    path.as_deref(),
-                    &format,
-                    triage,
-                    tx_report.as_deref(),
-                    expectations.as_deref(),
-                    fp_suppressions.as_deref(),
-                    config.as_deref(),
-                    fail_on.as_deref(),
-                )
-            }
+            AnalyzeTarget::Src {
+                path,
+                format,
+                triage,
+                tx_report,
+                expectations,
+                fp_suppressions,
+                config,
+                fail_on,
+                baseline,
+                update_baseline,
+            } => analyzer::run(
+                path.as_deref(),
+                &format,
+                triage,
+                tx_report.as_deref(),
+                expectations.as_deref(),
+                fp_suppressions.as_deref(),
+                config.as_deref(),
+                fail_on.as_deref(),
+                baseline.as_deref(),
+                update_baseline,
+            ),
         },
         Commands::Fuzz { action } => match action {
             FuzzAction::Init => fuzzer::init(),

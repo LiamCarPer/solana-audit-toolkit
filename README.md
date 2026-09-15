@@ -64,6 +64,15 @@ Parses Rust source with `syn` to analyze `#[derive(Accounts)]` and `#[program]` 
 
 **CI:** `--format sarif` exports to `sat-results.sarif` for GitHub Code Scanning; `--format json` prints a machine-readable report to stdout. `--fail-on <critical|high|medium|low|info|none>` exits non-zero (2) when any finding is at or above the threshold, so pipelines gate automatically.
 
+**Baseline (adopt without noise):** snapshot the current accepted findings once, then report/gate only on regressions. Finding identity ignores line drift, so moved code is not a "new" finding.
+
+```bash
+# accept the current state once
+sat analyze src programs/vault/src --baseline .sat-baseline.json --update-baseline
+# CI: fail only on findings introduced after the baseline
+sat analyze src programs/vault/src --baseline .sat-baseline.json --fail-on high
+```
+
 **Configuration (`sat.toml`):** tune the scan without recompiling — discovered from the working directory or passed via `--config`:
 
 ```toml

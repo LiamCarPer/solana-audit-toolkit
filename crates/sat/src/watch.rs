@@ -107,9 +107,10 @@ pub fn signature_from_finding(finding: &Finding, src_path: &str) -> FindingSigna
     }
 }
 
-/// Strips the analyzed source prefix from a location and normalizes path
-/// separators: `C:\repo\program\src\lib.rs:10 (set)` + src `C:\repo\program\src`
-/// → `lib.rs:10 (set)`.
+/// Strips the analyzed source prefix from a location, normalizes path
+/// separators, and drops the line/column so line drift is not a new signature:
+/// `C:\repo\program\src\lib.rs:10 (set)` + src `C:\repo\program\src`
+/// → `lib.rs (set)`.
 fn normalize_location(location: Option<&str>, src_path: &str) -> String {
     let Some(raw) = location else { return String::new() };
     let normalized_src = src_path.replace('\\', "/").trim_end_matches('/').to_string();
@@ -117,7 +118,37 @@ fn normalize_location(location: Option<&str>, src_path: &str) -> String {
     if !normalized_src.is_empty() && normalized.starts_with(&normalized_src) {
         normalized = normalized[normalized_src.len()..].trim_start_matches('/').to_string();
     }
-    normalized
+    strip_line_numbers(&normalized)
+}
+
+/// Remove the `:line` / `:line:col` segment from a `path:line (fn)` location,
+/// keeping any trailing ` (fn ...)` suffix. `lib.rs:10 (a::b)` → `lib.rs (a::b)`.
+fn strip_line_numbers(location: &str) -> String {
+    if let Some(idx) = location.rfind(" (") {
+        let (head, tail) = location.split_at(idx);
+        format!("{}{}", strip_trailing_line(head), tail)
+    } else {
+        strip_trailing_line(location)
+    }
+}
+
+fn strip_trailing_line(s: &str) -> String {
+    let mut base = s;
+    // Peel up to two trailing `:digits` segments (line, then column).
+    for _ in 0..2 {
+        match base.rfind(':') {
+            Some(pos) => {
+                let digits = &base[pos + 1..];
+                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                    base = &base[..pos];
+                } else {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    base.to_string()
 }
 
 /// Scans one repo and diffs it against the previous scan state.
