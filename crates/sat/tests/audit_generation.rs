@@ -133,7 +133,7 @@ fn audit_run_generates_report_for_source() {
     let report = dir.path().join("audit-report.md");
     let report_str = report.to_str().unwrap().to_string();
 
-    audit::run(Some(&src), Some(&report_str), None).expect("audit run should succeed");
+    audit::run(Some(&src), Some(&report_str), None, "md").expect("audit run should succeed");
 
     let content = fs::read_to_string(&report).expect("report file should exist");
     assert!(content.contains("# Audit Report"), "report header missing");
@@ -148,7 +148,7 @@ fn audit_run_errors_on_missing_source() {
     let missing = dir.path().join("does-not-exist");
     let report = dir.path().join("audit-report.md");
 
-    let err = audit::run(Some(missing.to_str().unwrap()), Some(report.to_str().unwrap()), None)
+    let err = audit::run(Some(missing.to_str().unwrap()), Some(report.to_str().unwrap()), None, "md")
         .expect_err("running against a missing source should fail");
     assert!(err.to_string().contains("No Rust source files"), "unexpected error: {err}");
 }
@@ -164,9 +164,48 @@ fn audit_run_classifies_rule_ids() {
     let report = dir.path().join("audit-report.md");
     let report_str = report.to_str().unwrap().to_string();
 
-    audit::run(Some(&src), Some(&report_str), None).expect("audit run should succeed");
+    audit::run(Some(&src), Some(&report_str), None, "md").expect("audit run should succeed");
 
     let content = fs::read_to_string(&report).expect("report file should exist");
     assert!(content.contains("**Rule:** SAT001"), "missing-signer finding not classified as SAT001");
     assert!(content.contains("Missing Signer"), "missing-signer finding title missing");
+}
+
+#[test]
+fn render_html_is_self_contained_and_escaped() {
+    let findings = vec![
+        finding("SAT-001", "Missing Signer: `Vault::authority` (a <b> & c)", Severity::High),
+        finding("SAT-002", "CEI Violation: `withdraw` writes state after external call", Severity::Critical),
+    ];
+
+    let html = audit::render_html(&findings, "vault", Some("Vault2Au2x"), None);
+
+    assert!(html.starts_with("<!doctype html>"), "missing doctype");
+    assert!(html.contains("<style>"), "embedded CSS missing");
+    assert!(html.contains("Audit Report"), "header missing");
+    assert!(html.contains("Executive Summary"), "summary missing");
+    assert!(html.contains("Scope &amp; Honest Limitations"), "limitations missing");
+    // Untrusted title text must be escaped (no raw angle brackets from the title).
+    assert!(html.contains("&lt;b&gt; &amp; c"), "title not HTML-escaped");
+    assert!(!html.contains("(a <b> & c)"), "raw unescaped title leaked");
+    // Severity badge class present.
+    assert!(html.contains("badge critical"), "critical badge missing");
+}
+
+#[test]
+fn audit_run_writes_html_report() {
+    let dir = tempdir().unwrap();
+    let src_dir = dir.path().join("vault");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(src_dir.join("lib.rs"), MISSING_SIGNER_SOURCE).unwrap();
+    let src = src_dir.to_str().unwrap().to_string();
+
+    let report = dir.path().join("audit-report.html");
+    let report_str = report.to_str().unwrap().to_string();
+
+    audit::run(Some(&src), Some(&report_str), None, "html").expect("audit run should succeed");
+
+    let content = fs::read_to_string(&report).expect("report file should exist");
+    assert!(content.starts_with("<!doctype html>"), "html report missing doctype");
+    assert!(content.contains("SAT001"), "missing-signer finding not classified as SAT001");
 }

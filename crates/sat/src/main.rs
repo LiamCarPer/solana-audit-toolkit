@@ -65,13 +65,16 @@ enum Commands {
         #[command(subcommand)]
         action: ReportAction,
     },
-    /// Generate an automated markdown audit report
+    /// Generate an automated audit report (markdown or self-contained HTML)
     Audit {
         /// Path to the source directory or file (same as `analyze src`)
         path: Option<String>,
-        /// Output markdown file
+        /// Output report file
         #[arg(long, default_value = "audit-report.md")]
         out: String,
+        /// Report format: md or html
+        #[arg(long, default_value = "md")]
+        format: String,
         /// Transaction analysis report JSON for correlation findings
         #[arg(long)]
         tx_report: Option<String>,
@@ -220,7 +223,9 @@ fn main() -> Result<()> {
         Commands::Report { action } => match action {
             ReportAction::New => reporter::new_finding(),
         },
-        Commands::Audit { path, out, tx_report } => audit::run(path.as_deref(), Some(&out), tx_report.as_deref()),
+        Commands::Audit { path, out, format, tx_report } => {
+            audit::run(path.as_deref(), Some(&out), tx_report.as_deref(), &format)
+        }
         Commands::Watch { config, out_dir } => watch::run(&config, &out_dir),
         Commands::Taint { path } => taint::run(path.as_deref()),
         Commands::Accounting { path } => accounting::run(path.as_deref()),

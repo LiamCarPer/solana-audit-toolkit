@@ -111,6 +111,14 @@ Generates a `formal-verification/` sub-crate for Kani-based formal verification:
 
 The generated harnesses encode the same invariants the analyzer checks statically, giving a machine-checked second opinion before deploy.
 
+### `sat audit [PATH] [--out FILE] [--format md|html] [--tx-report PATH]`
+
+Runs the full analysis and writes a professional report — a metadata header, an executive summary with severity/confidence distributions, findings grouped by rule, and a fixed scope/honest-limitations section. `--format html` emits a **self-contained** HTML report (embedded CSS, no external assets), ready as a client deliverable or CI artifact.
+
+```bash
+sat audit programs/vault/src --out vault-audit.html --format html
+```
+
 ### `sat report new`
 
 Interactive CLI to create structured markdown audit findings with YAML front-matter. Auto-increments `SAT-XXX` IDs from existing files in `audit-findings/`. Outputs slugified filenames (e.g. `SAT-001-missing-signer-check.md`).
