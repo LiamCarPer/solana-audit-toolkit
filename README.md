@@ -167,6 +167,24 @@ jobs:
 
 **Output:** `sarif-file` — path to the generated SARIF report.
 
+## `parity` — Differential/Behavioral Engine
+
+Static pattern rules find textbook bugs; audited code has none left. `parity` (a companion binary in this workspace) finds the bugs that **survive audits** — rounding asymmetries, interest/index accounting drift, sequence-dependent state — by running the **same normalized scenario** against two implementations of a primitive and reporting where their observable state diverges.
+
+- **Reference model** — a small exact model of the protocol math (shares, index interest, explicit rounding direction), authored from source.
+- **Candidate** — a sibling protocol or (roadmap) a `solana-program-test` adapter executing the real program.
+- The engine does the mechanical work (execution, normalization, diffing, minimal repro, reporting); the AI does the protocol-logic reasoning.
+
+```bash
+# prove the engine works: reference vs a known rounding bug (free money)
+cargo run -p parity -- demo
+
+# run a scenario; exits 2 on divergence (CI-gateable)
+cargo run -p parity -- run --scenario parity-scenario.json
+```
+
+See `docs/PARITY.md` for the design and the roadmap (cross-implementation parity, `program-test` backend, fork mode).
+
 ## Bug Bounty Workflow
 
 See `docs/BUG_BOUNTY_WORKFLOW.md` for the recommended loop: triage, manual verification, PoC construction, false-positive control, and fuzzer follow-up.
