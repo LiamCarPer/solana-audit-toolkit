@@ -1,0 +1,12 @@
+{
+  "name": "marginfi-usdc",
+  "description": "marginfi deposit/withdraw",
+  "config": { "price": 1, "rate_bps_per_second": 0 },
+  "accounts": [{ "role": "user", "name": "user", "initial": 1000000000 }],
+  "ops": [
+    { "op": "deposit", "user": "user", "amount": 100000000 },
+    { "op": "deposit", "user": "user", "amount": 100000000 },
+    { "op": "withdraw", "user": "user", "amount": 50000000 }
+  ],
+  "invariants": ["solvency", "share_conservation", "vault_backing"]
+}

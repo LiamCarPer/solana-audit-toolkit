@@ -145,9 +145,15 @@ harness where the target's toolchain is available.
   `solana-program-test` harness running a real program end to end.
 - **P2.5 (done):** `parity emit-harness` scaffolds a target adapter, mirroring
   the target's dependency versions and leaving four AI-fillable TODOs.
-- **P3 — real adapters:** fill the adapter for a live lending target (Kamino
-  klend / Solend / Marginfi) and diff it against the reference model. Requires
-  building the generated harness under the target's own toolchain.
+- **P3 (done, deposit/withdraw scope):** a real adapter for the audited
+  **MarginFi** lending program runs it in `solana-program-test` and diffs the
+  trace against the reference model → **CLEAN parity** on a no-interest USDC
+  deposit/deposit/withdraw scenario. Worked example:
+  `crates/parity/fixtures/marginfi-harness/` (README has the full reproduce
+  recipe, incl. `cargo build-sbf` for the target `.so`s and `BPF_OUT_DIR`).
+- **P3.5 — widen the MarginFi adapter:** map `borrow`/`repay`/`accrue` and
+  author a MarginFi-specific reference model (its interest curve), so the
+  differential reaches margin/interest math.
 - **P4 — fork mode:** adversarial sequences (flash-loan → oracle move → borrow)
   against forked mainnet state via RPC, reusing `rts` simulation.
 
